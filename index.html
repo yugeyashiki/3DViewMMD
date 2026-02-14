@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:,">
-    <title>VRM Web 3D Viewer</title>
+    <title>MMD Web 3D Viewer</title>
     <style>
         body {
             margin: 0;
@@ -51,8 +51,7 @@
             border: 2px solid red;
         }
 
-        /* 🆕 Phase 3: CSS Improvements */
-        /* エラーコンテナのスタイル改善 */
+        /* エラーコンテナのスタイル */
         #error-container {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
@@ -66,7 +65,7 @@
             line-height: 1.6;
         }
 
-        /* カメラ同意UIのスタイル改善 */
+        /* カメラ同意UIのスタイル */
         #consent-box h2 {
             margin: 0 0 20px 0;
         }
@@ -85,16 +84,10 @@
             box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
         }
 
-        /* video-containerの改善 */
-        #video-container {
-            transition: transform 0.3s ease;
-        }
-
         #video-container:hover {
             transform: scale(1.05);
         }
 
-        /* デバッグオーバーレイ */
         .hidden {
             display: none !important;
         }
@@ -129,7 +122,7 @@
         <video id="input_video" playsinline></video>
     </div>
 
-    <!-- 🆕 エラー表示用のコンテナを追加 -->
+    <!-- エラー表示用のコンテナ -->
     <div id="error-container"
         style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255, 0, 0, 0.9); color: white; padding: 30px; border-radius: 16px; z-index: 10000; max-width: 400px; text-align: center;">
         <h3 id="error-title">エラーが発生しました</h3>
@@ -138,10 +131,15 @@
             style="margin-top: 15px; padding: 10px 20px; background: white; color: #ef4444; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;">再読み込み</button>
     </div>
 
-    <div id="debug-overlay">BONE OFFSET: ACTIVE</div>
+    <div id="debug-overlay">MMD MODE: ACTIVE</div>
+
+    <!-- Background Video -->
+    <video id="bg-video" loop playsinline muted style="display:none;">
+        <source src="Videos/ワールドイズマイン.mp4" type="video/mp4">
+    </video>
 
     <!-- Three.js and Logic -->
-    <script type="module" src="/script.js?v=FORCE_006"></script>
+    <script type="module" src="/script.js?v=MMD_001"></script>
 </body>
 
 </html>

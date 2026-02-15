@@ -85,6 +85,17 @@ let availableVideoDevices = [];
 let currentDeviceIndex = 0;
 let currentStream = null;
 
+// --- Mouse Drag Camera Control ---
+let isDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+const DRAG_SENSITIVITY = 0.3;
+
+// --- Pause Control ---
+let isPaused = false;
+
 // --- MediaPipe ---
 let faceMesh;
 let cameraInput;
@@ -166,6 +177,35 @@ function setupThreeJS() {
         targetCameraZ += e.deltaY * CONFIG.WHEEL_SENSITIVITY;
         targetCameraZ = THREE.MathUtils.clamp(targetCameraZ, currentConfig.ZOOM_MIN_Z, currentConfig.ZOOM_MAX_Z);
     }, { passive: true });
+
+    // Left-click drag for manual camera angle control (exclusive mode)
+    renderer.domElement.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            renderer.domElement.style.cursor = 'grabbing';
+        }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastMouseX;
+        const dy = e.clientY - lastMouseY;
+        dragOffsetX += dx * DRAG_SENSITIVITY;
+        dragOffsetY -= dy * DRAG_SENSITIVITY;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (e.button === 0 && isDragging) {
+            isDragging = false;
+            dragOffsetX = 0;
+            dragOffsetY = 0;
+            renderer.domElement.style.cursor = 'default';
+        }
+    });
 }
 
 function setupRoom() {
@@ -359,8 +399,9 @@ async function setupFaceMesh() {
             };
         }
 
-        // --- Visibility Toggle (H Key) ---
+        // --- Keyboard Shortcuts ---
         window.addEventListener('keydown', (e) => {
+            // H Key: Toggle camera window visibility
             if (e.key.toLowerCase() === 'h') {
                 const container = document.getElementById('video-container');
                 if (container) {
@@ -368,6 +409,16 @@ async function setupFaceMesh() {
                     container.style.display = isHidden ? 'block' : 'none';
                     debugLog(`Camera window ${isHidden ? 'shown' : 'hidden'} via H key`);
                 }
+            }
+            // Space Key: Pause/Resume animation & background video
+            if (e.code === 'Space') {
+                e.preventDefault();
+                isPaused = !isPaused;
+                const bgVideo = document.getElementById('bg-video');
+                if (bgVideo) {
+                    isPaused ? bgVideo.pause() : bgVideo.play();
+                }
+                debugLog(`Animation ${isPaused ? 'PAUSED ⏸' : 'RESUMED ▶'}`);
             }
         });
 
@@ -385,7 +436,7 @@ async function setupFaceMesh() {
         };
         processFrame();
 
-        document.getElementById('video-container').style.display = 'block';
+        // Camera window is hidden by default. Press 'H' to toggle visibility.
     } catch (error) {
         showError('カメラの起動に失敗しました: ' + error.message);
     }
@@ -510,7 +561,7 @@ function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
 
-    if (helper) {
+    if (helper && !isPaused) {
         helper.update(delta);
     }
 
@@ -518,16 +569,18 @@ function animate() {
         // --- Natural Parallax Logic ---
         const parallaxSensitivity = currentConfig.PARALLAX_SENSITIVITY;
 
-        // Camera moves opposite to user shift to simulate depth
-        camera.position.x = userEyePosition.x * parallaxSensitivity;
+        if (isDragging) {
+            // Exclusive Mode: Face tracking paused, mouse controls camera
+            camera.position.x = dragOffsetX;
+            camera.position.y = CONFIG.CAMERA_POSITION.y + dragOffsetY;
+        } else {
+            // Normal Mode: Face tracking controls camera
+            camera.position.x = userEyePosition.x * parallaxSensitivity;
+            camera.position.y = (userEyePosition.y - CONFIG.EYE_OFFSET_Y) * parallaxSensitivity + CONFIG.CAMERA_POSITION.y;
+        }
 
-        // Camera vertical movement relative to base height
-        camera.position.y = (userEyePosition.y - CONFIG.EYE_OFFSET_Y) * parallaxSensitivity + CONFIG.CAMERA_POSITION.y;
-
-        // Combine base position, manual zoom, and face depth
+        // Z-axis (zoom) is always active regardless of drag state
         camera.position.z = targetCameraZ + faceDepthOffset;
-
-        // Final clamp to prevent camera from going through/too far
         camera.position.z = THREE.MathUtils.clamp(camera.position.z, currentConfig.ZOOM_MIN_Z, currentConfig.ZOOM_MAX_Z * 1.5);
 
         camera.lookAt(CONFIG.CAMERA_LOOKAT.x, CONFIG.CAMERA_LOOKAT.y, CONFIG.CAMERA_LOOKAT.z);

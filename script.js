@@ -37,7 +37,14 @@ const CONFIG = {
         MODEL_PATH: './Models/model.pmx',
         MOTION_PATH: './Motions/motion.vmd',
         USE_PHYSICS: false
-    }
+    },
+
+    // Zoom & Depth Settings
+    ZOOM_MIN_Z: 10,            // Reset to 10
+    ZOOM_MAX_Z: 200,           // Slightly reduced limit
+    WHEEL_SENSITIVITY: 0.1,    // Keep current wheel speed
+    FACE_DEPTH_FACTOR: 1500.0, // Reduced from 2500.0 for better balance
+    FACE_DEPTH_LERP: 0.1       // Keep steady response
 };
 
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
@@ -54,6 +61,11 @@ let mesh = null;
 let helper = null;
 let clock = new THREE.Clock();
 let gridRoom = null;
+
+// Virtual camera position to combine various inputs
+let targetCameraZ = CONFIG.CAMERA_POSITION.z;
+let faceDepthOffset = 0;
+let baseFaceDistance = null; // Initial Eye distance for calibration
 
 // --- MediaPipe ---
 let faceMesh;
@@ -130,6 +142,12 @@ function setupThreeJS() {
 
     document.body.appendChild(renderer.domElement);
     window.addEventListener('resize', onWindowResize, false);
+
+    // Mouse wheel for manual zoom
+    window.addEventListener('wheel', (e) => {
+        targetCameraZ += e.deltaY * CONFIG.WHEEL_SENSITIVITY;
+        targetCameraZ = THREE.MathUtils.clamp(targetCameraZ, CONFIG.ZOOM_MIN_Z, CONFIG.ZOOM_MAX_Z);
+    }, { passive: true });
 }
 
 function setupRoom() {
@@ -376,6 +394,26 @@ function updateTracking(lm) {
     userEyePosition.x = THREE.MathUtils.lerp(userEyePosition.x, targetX, CONFIG.LERP_SPEED);
     userEyePosition.y = THREE.MathUtils.lerp(userEyePosition.y, targetY + CONFIG.EYE_OFFSET_Y, CONFIG.LERP_SPEED);
 
+    // --- Face Depth (Z) Calculation ---
+    // Use distance between inner eye corners (133 and 362)
+    const p1 = lm[133];
+    const p2 = lm[362];
+    const currentDist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+
+    if (baseFaceDistance === null) {
+        baseFaceDistance = currentDist; // Calibrate on first detection
+        debugLog('Base face distance calibrated:', baseFaceDistance);
+    }
+
+    // Larger currentDist means face is closer. Offset is negative (toward model).
+    const depthChange = (currentDist - baseFaceDistance) * CONFIG.FACE_DEPTH_FACTOR;
+    faceDepthOffset = THREE.MathUtils.lerp(faceDepthOffset, -depthChange, CONFIG.FACE_DEPTH_LERP);
+
+    // Occasional debug log for distance changes
+    if (DEBUG_MODE && Math.random() < 0.01) {
+        console.log(`[Depth] Dist: ${currentDist.toFixed(4)}, Offset: ${faceDepthOffset.toFixed(2)}`);
+    }
+
     // Blink detection remains optimized for MMD morphs
     if (mesh) {
         const leftOpen = (lm[159].y - lm[145].y) / (lm[33].x - lm[133].x);
@@ -400,13 +438,19 @@ function animate() {
 
     if (userEyePosition) {
         // --- Natural Parallax Logic ---
-        const parallaxSensitivity = 5.0; // Further exaggerated for effect
+        const parallaxSensitivity = 7.5; // Balanced between 5.0 and 10.0
 
         // Camera moves opposite to user shift to simulate depth
         camera.position.x = userEyePosition.x * parallaxSensitivity;
 
         // Camera vertical movement relative to base height
         camera.position.y = (userEyePosition.y - CONFIG.EYE_OFFSET_Y) * parallaxSensitivity + CONFIG.CAMERA_POSITION.y;
+
+        // Combine base position, manual zoom, and face depth
+        camera.position.z = targetCameraZ + faceDepthOffset;
+
+        // Final clamp to prevent camera from going through/too far
+        camera.position.z = THREE.MathUtils.clamp(camera.position.z, CONFIG.ZOOM_MIN_Z, CONFIG.ZOOM_MAX_Z * 1.5);
 
         camera.lookAt(CONFIG.CAMERA_LOOKAT.x, CONFIG.CAMERA_LOOKAT.y, CONFIG.CAMERA_LOOKAT.z);
     }

@@ -39,13 +39,28 @@ const CONFIG = {
         USE_PHYSICS: false
     },
 
-    // Zoom & Depth Settings
-    ZOOM_MIN_Z: 10,            // Reset to 10
-    ZOOM_MAX_Z: 200,           // Slightly reduced limit
-    WHEEL_SENSITIVITY: 0.1,    // Keep current wheel speed
-    FACE_DEPTH_FACTOR: 1500.0, // Reduced from 2500.0 for better balance
-    FACE_DEPTH_LERP: 0.1       // Keep steady response
+    // Zoom & Depth Settings (Dynamic Profiles)
+    PROFILES: {
+        NORMAL: {
+            ZOOM_MIN_Z: 10,
+            ZOOM_MAX_Z: 150,
+            FACE_DEPTH_FACTOR: 1200.0,
+            FACE_DEPTH_LERP: 0.1,
+            PARALLAX_SENSITIVITY: 7.5
+        },
+        VTS: {
+            ZOOM_MIN_Z: 10,
+            ZOOM_MAX_Z: 300,
+            FACE_DEPTH_FACTOR: 4500.0,
+            FACE_DEPTH_LERP: 0.08,
+            PARALLAX_SENSITIVITY: 18.0
+        }
+    },
+    WHEEL_SENSITIVITY: 0.15
 };
+
+// Current active settings (initially NORMAL)
+let currentConfig = { ...CONFIG.PROFILES.NORMAL };
 
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
 
@@ -66,6 +81,9 @@ let gridRoom = null;
 let targetCameraZ = CONFIG.CAMERA_POSITION.z;
 let faceDepthOffset = 0;
 let baseFaceDistance = null; // Initial Eye distance for calibration
+let availableVideoDevices = [];
+let currentDeviceIndex = 0;
+let currentStream = null;
 
 // --- MediaPipe ---
 let faceMesh;
@@ -146,7 +164,7 @@ function setupThreeJS() {
     // Mouse wheel for manual zoom
     window.addEventListener('wheel', (e) => {
         targetCameraZ += e.deltaY * CONFIG.WHEEL_SENSITIVITY;
-        targetCameraZ = THREE.MathUtils.clamp(targetCameraZ, CONFIG.ZOOM_MIN_Z, CONFIG.ZOOM_MAX_Z);
+        targetCameraZ = THREE.MathUtils.clamp(targetCameraZ, currentConfig.ZOOM_MIN_Z, currentConfig.ZOOM_MAX_Z);
     }, { passive: true });
 }
 
@@ -293,33 +311,33 @@ async function setupFaceMesh() {
     try {
         await requestCameraPermission();
         const video = document.getElementById('input_video');
+        const switchBtn = document.getElementById('switch-camera');
 
-        // --- Camera Device Selection ---
-        debugLog('Listing camera devices...');
+        // --- List Cameras ---
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        availableVideoDevices = devices.filter(device => device.kind === 'videoinput');
 
-        // Log all found devices for debugging
-        videoDevices.forEach(d => debugLog(`Camera found: ${d.label} (ID: ${d.deviceId})`));
+        console.log('--- 📷 Available Cameras ---');
+        availableVideoDevices.forEach((d, i) => console.log(`[${i}] ${d.label} (ID: ${d.deviceId})`));
 
-        // Filter out known virtual cameras to find a real one
-        const virtualKeywords = ['virtual', 'nizima', 'obs', 'vtubestudio', 'unity', 'webcam 7', 'splitcam', 'manycam'];
-        let selectedDevice = videoDevices.find(device => {
+        // Initial selection: Prefer physical camera (not VTube Studio)
+        let initialIndex = availableVideoDevices.findIndex(device => {
             const label = device.label.toLowerCase();
-            return !virtualKeywords.some(keyword => label.includes(keyword)) && label !== '';
+            const virtualKeywords = ['vtubestudio', 'vtube studio', 'obs', 'unity', 'webcam 7', 'splitcam', 'manycam'];
+            return label !== '' && !virtualKeywords.some(keyword => label.includes(keyword));
         });
 
-        // Fallback to first available if no physical one detected or labels are empty
-        if (!selectedDevice && videoDevices.length > 0) {
-            selectedDevice = videoDevices[0];
+        if (initialIndex === -1 && availableVideoDevices.length > 0) {
+            // Second preference: VTube Studio
+            initialIndex = availableVideoDevices.findIndex(device => {
+                const label = device.label.toLowerCase();
+                return label.includes('vtubestudio') || label.includes('vtube studio');
+            });
         }
 
-        if (selectedDevice) {
-            console.log('[Camera] Selected device:', selectedDevice.label);
-        } else {
-            console.warn('[Camera] No specific camera device identified, using system default.');
-        }
+        currentDeviceIndex = initialIndex !== -1 ? initialIndex : 0;
 
+        // Init FaceMesh
         faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
         faceMesh.setOptions({
             maxNumFaces: 1,
@@ -329,32 +347,92 @@ async function setupFaceMesh() {
         });
         faceMesh.onResults(onFaceResults);
 
-        // --- Manual Stream Initialization ---
-        const deviceId = selectedDevice ? selectedDevice.deviceId : null;
-        console.log('[Camera] Target Device:', selectedDevice ? selectedDevice.label : 'Default');
+        // --- Start Camera ---
+        await startCamera(availableVideoDevices[currentDeviceIndex]);
 
-        const manualConstraints = {
-            video: deviceId ? { deviceId: { exact: deviceId }, width: 640, height: 480 } : { width: 640, height: 480 }
-        };
+        // --- Setup Switch Button ---
+        if (switchBtn) {
+            switchBtn.onclick = async () => {
+                if (availableVideoDevices.length <= 1) return;
+                currentDeviceIndex = (currentDeviceIndex + 1) % availableVideoDevices.length;
+                await startCamera(availableVideoDevices[currentDeviceIndex]);
+            };
+        }
 
-        debugLog('Requesting stream with constraints:', manualConstraints);
-        const stream = await navigator.mediaDevices.getUserMedia(manualConstraints);
-        video.srcObject = stream;
-        await video.play();
+        // --- Visibility Toggle (H Key) ---
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'h') {
+                const container = document.getElementById('video-container');
+                if (container) {
+                    const isHidden = container.style.display === 'none';
+                    container.style.display = isHidden ? 'block' : 'none';
+                    debugLog(`Camera window ${isHidden ? 'shown' : 'hidden'} via H key`);
+                }
+            }
+        });
 
-        // Standard frame processing loop without using MediaPipe's Camera helper
+        // Standard frame processing loop
         const processFrame = async () => {
-            if (video && !video.paused && !video.ended) {
-                await faceMesh.send({ image: video });
+            // Stability Check: Only send if video is playing, has enough data, and valid dimensions
+            if (video && !video.paused && !video.ended && video.readyState >= 3 && video.videoWidth > 0) {
+                try {
+                    await faceMesh.send({ image: video });
+                } catch (err) {
+                    console.error('[FaceMesh] Processing error (safe to ignore if temporary):', err);
+                }
             }
             requestAnimationFrame(processFrame);
         };
         processFrame();
 
         document.getElementById('video-container').style.display = 'block';
-        console.log('[Camera] Camera system initialized successfully with manual loop.');
     } catch (error) {
         showError('カメラの起動に失敗しました: ' + error.message);
+    }
+}
+
+async function startCamera(selectedDevice) {
+    if (!selectedDevice) return;
+    const video = document.getElementById('input_video');
+
+    // Stop existing stream
+    if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+    }
+
+    console.log('%c[Camera] Switching to: ' + selectedDevice.label, 'color: #00ffff; font-weight: bold;');
+
+    // Apply Dynamic Profile
+    const isVTS = selectedDevice.label.toLowerCase().includes('vtubestudio') ||
+        selectedDevice.label.toLowerCase().includes('vtube studio');
+    currentConfig = isVTS ? { ...CONFIG.PROFILES.VTS } : { ...CONFIG.PROFILES.NORMAL };
+    console.log(`[Camera] Applied Profile: ${isVTS ? 'VTS (High Sensitivity)' : 'NORMAL (Standard)'}`);
+
+    // Constraints: Using 'ideal' instead of 'exact' for better fallback
+    const manualConstraints = {
+        video: {
+            deviceId: { ideal: selectedDevice.deviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    };
+
+    try {
+        currentStream = await navigator.mediaDevices.getUserMedia(manualConstraints);
+        video.srcObject = currentStream;
+        await video.play();
+
+        const track = currentStream.getVideoTracks()[0];
+        const settings = track.getSettings();
+        console.log(`[Camera] Actual Stream Resolution: ${settings.width}x${settings.height} @ ${settings.frameRate}fps`);
+        console.log('[Camera] Camera system initialized successfully.');
+    } catch (e) {
+        console.error('[Camera] Failed to start camera:', e);
+        // Specialized message for "In Use" error
+        const msg = (e.name === 'NotReadableError')
+            ? 'カメラが他のアプリ（VTube Studio等）で使用中です。VTSを閉じるか、VTS仮想カメラ（VTubeStudioCam）に切り替えてください。'
+            : 'カメラの切り替えに失敗しました。ブラウザの許可設定を確認してください。';
+        showError(msg);
     }
 }
 
@@ -406,8 +484,8 @@ function updateTracking(lm) {
     }
 
     // Larger currentDist means face is closer. Offset is negative (toward model).
-    const depthChange = (currentDist - baseFaceDistance) * CONFIG.FACE_DEPTH_FACTOR;
-    faceDepthOffset = THREE.MathUtils.lerp(faceDepthOffset, -depthChange, CONFIG.FACE_DEPTH_LERP);
+    const depthChange = (currentDist - baseFaceDistance) * currentConfig.FACE_DEPTH_FACTOR;
+    faceDepthOffset = THREE.MathUtils.lerp(faceDepthOffset, -depthChange, currentConfig.FACE_DEPTH_LERP);
 
     // Occasional debug log for distance changes
     if (DEBUG_MODE && Math.random() < 0.01) {
@@ -438,7 +516,7 @@ function animate() {
 
     if (userEyePosition) {
         // --- Natural Parallax Logic ---
-        const parallaxSensitivity = 7.5; // Balanced between 5.0 and 10.0
+        const parallaxSensitivity = currentConfig.PARALLAX_SENSITIVITY;
 
         // Camera moves opposite to user shift to simulate depth
         camera.position.x = userEyePosition.x * parallaxSensitivity;
@@ -450,7 +528,7 @@ function animate() {
         camera.position.z = targetCameraZ + faceDepthOffset;
 
         // Final clamp to prevent camera from going through/too far
-        camera.position.z = THREE.MathUtils.clamp(camera.position.z, CONFIG.ZOOM_MIN_Z, CONFIG.ZOOM_MAX_Z * 1.5);
+        camera.position.z = THREE.MathUtils.clamp(camera.position.z, currentConfig.ZOOM_MIN_Z, currentConfig.ZOOM_MAX_Z * 1.5);
 
         camera.lookAt(CONFIG.CAMERA_LOOKAT.x, CONFIG.CAMERA_LOOKAT.y, CONFIG.CAMERA_LOOKAT.z);
     }

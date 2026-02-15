@@ -15,18 +15,23 @@
 
         canvas {
             display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 1;
         }
 
         #video-container {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            width: 160px;
-            height: 120px;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 240px;
+            height: 180px;
             border: 2px solid rgba(255, 255, 255, 0.5);
             border-radius: 8px;
             overflow: hidden;
-            z-index: 10;
+            z-index: 9999;
+            background: #000;
         }
 
         video {
@@ -152,7 +157,7 @@
 
     <!-- Background Video -->
     <video id="bg-video" loop playsinline muted style="display:none;">
-        <source src="Videos/ワールドイズマイン.mp4" type="video/mp4">
+        <source src="Videos/biri_sabi_1.mp4" type="video/mp4">
     </video>
 
     <!-- Three.js and Logic -->

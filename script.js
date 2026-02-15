@@ -35,7 +35,10 @@ const CONFIG = {
     // MMD Settings
     MMD: {
         MODEL_PATH: './Models/model.pmx',
-        MOTION_PATH: './Motions/motion.vmd',
+        MOTION_PATHS: [
+            './Motions/ビリ モーション_01.vmd',
+            './Motions/ビリ 表情・リップ_01.vmd'
+        ],
         USE_PHYSICS: false
     },
 
@@ -146,13 +149,14 @@ async function init() {
         helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
 
         // Load MMD
-        await loadMMDAsync(CONFIG.MMD.MODEL_PATH, CONFIG.MMD.MOTION_PATH);
+        await loadMMDAsync(CONFIG.MMD.MODEL_PATH, CONFIG.MMD.MOTION_PATHS);
         await setupFaceMesh();
 
-        // Start background video just before animation loop starts to sync with MMD
-        await startBackgroundVideo();
-
+        // Sync: Reset clock, start animation, delay video by 1 second
+        if (bgVideo) bgVideo.currentTime = 0;
+        clock = new THREE.Clock();
         animate();
+        setTimeout(() => startBackgroundVideo(), 1000);
 
     } catch (error) {
         showError('初期化エラー: ' + error.message);
@@ -262,12 +266,12 @@ async function startBackgroundVideo() {
     }
 }
 
-async function loadMMDAsync(modelUrl, motionUrl) {
+async function loadMMDAsync(modelUrl, motionUrls) {
     return new Promise((resolve, reject) => {
         const loader = new MMDLoader();
-        debugLog('🎬 MMD Loading Start:', modelUrl, motionUrl);
+        debugLog('🎬 MMD Loading Start:', modelUrl, motionUrls);
 
-        loader.loadWithAnimation(modelUrl, motionUrl, (mmd) => {
+        loader.loadWithAnimation(modelUrl, motionUrls, (mmd) => {
             mesh = mmd.mesh;
 
             // --- Diagnostic Material Inspection ---
@@ -360,22 +364,24 @@ async function setupFaceMesh() {
         console.log('--- 📷 Available Cameras ---');
         availableVideoDevices.forEach((d, i) => console.log(`[${i}] ${d.label} (ID: ${d.deviceId})`));
 
-        // Initial selection: Prefer physical camera (not VTube Studio)
+        // Initial selection: Prefer physical camera (not virtual cameras)
         let initialIndex = availableVideoDevices.findIndex(device => {
             const label = device.label.toLowerCase();
-            const virtualKeywords = ['vtubestudio', 'vtube studio', 'obs', 'unity', 'webcam 7', 'splitcam', 'manycam'];
+            const virtualKeywords = ['vtubestudio', 'vtube studio', 'obs', 'unity', 'webcam 7', 'splitcam', 'manycam', 'nizima', 'virtual camera'];
             return label !== '' && !virtualKeywords.some(keyword => label.includes(keyword));
         });
 
         if (initialIndex === -1 && availableVideoDevices.length > 0) {
-            // Second preference: VTube Studio
+            // Second preference: VTube Studio or nizima virtual camera
             initialIndex = availableVideoDevices.findIndex(device => {
                 const label = device.label.toLowerCase();
-                return label.includes('vtubestudio') || label.includes('vtube studio');
+                return label.includes('vtubestudio') || label.includes('vtube studio') || label.includes('nizima');
             });
         }
 
+        // Fallback: use first available device
         currentDeviceIndex = initialIndex !== -1 ? initialIndex : 0;
+        console.log(`[Camera] Selected index: ${currentDeviceIndex} (${availableVideoDevices[currentDeviceIndex]?.label || 'unknown'})`);
 
         // Init FaceMesh
         faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
@@ -453,16 +459,16 @@ async function startCamera(selectedDevice) {
 
     console.log('%c[Camera] Switching to: ' + selectedDevice.label, 'color: #00ffff; font-weight: bold;');
 
-    // Apply Dynamic Profile
-    const isVTS = selectedDevice.label.toLowerCase().includes('vtubestudio') ||
-        selectedDevice.label.toLowerCase().includes('vtube studio');
-    currentConfig = isVTS ? { ...CONFIG.PROFILES.VTS } : { ...CONFIG.PROFILES.NORMAL };
-    console.log(`[Camera] Applied Profile: ${isVTS ? 'VTS (High Sensitivity)' : 'NORMAL (Standard)'}`);
+    // Apply Dynamic Profile: VTS profile for any virtual camera
+    const label = selectedDevice.label.toLowerCase();
+    const isVirtual = ['vtubestudio', 'vtube studio', 'nizima', '3tene', 'virtual camera'].some(kw => label.includes(kw));
+    currentConfig = isVirtual ? { ...CONFIG.PROFILES.VTS } : { ...CONFIG.PROFILES.NORMAL };
+    console.log(`[Camera] Applied Profile: ${isVirtual ? 'VTS (High Sensitivity)' : 'NORMAL (Standard)'}`);
 
-    // Constraints: Using 'ideal' instead of 'exact' for better fallback
+    // Constraints: Using 'exact' to ensure the correct device is selected
     const manualConstraints = {
         video: {
-            deviceId: { ideal: selectedDevice.deviceId },
+            deviceId: { exact: selectedDevice.deviceId },
             width: { ideal: 1280 },
             height: { ideal: 720 }
         }

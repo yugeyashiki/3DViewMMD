@@ -32,6 +32,14 @@ const CONFIG = {
     LIGHT_INTENSITY: 1.5,
     AMBIENT_INTENSITY: 0.8,
 
+    // Box Stage (3D Room)
+    BOX_STAGE: {
+        BACK_Z: -50,          // バックスクリーンのZ位置
+        WALL_COLOR: 0x1a1a2e, // 壁面の色（床と統一）
+        WALL_OPACITY: 0.95,
+        DEPTH: 50,            // 箱の奥行き（カメラ側に向かっての長さ）
+    },
+
     // MMD Settings
     MMD: {
         MODEL_PATH: './Models/model.pmx',
@@ -79,6 +87,7 @@ let mesh = null;
 let helper = null;
 let clock = new THREE.Clock();
 let gridRoom = null;
+let boxStage = { back: null, left: null, right: null, ceiling: null };
 
 // Virtual camera position to combine various inputs
 let targetCameraZ = CONFIG.CAMERA_POSITION.z;
@@ -226,13 +235,110 @@ function setupRoom() {
     grid.visible = true; // Visible for debugging
     gridRoom.add(grid);
 
+    // --- 3D Box Stage (壁面・天井) ---
+    setupBoxStage();
+
     scene.add(gridRoom);
+}
+
+function setupBoxStage() {
+    const backZ = CONFIG.BOX_STAGE.BACK_Z;
+    const camZ = CONFIG.CAMERA_POSITION.z;
+    const depth = CONFIG.BOX_STAGE.DEPTH;
+    const color = CONFIG.BOX_STAGE.WALL_COLOR;
+    const opacity = CONFIG.BOX_STAGE.WALL_OPACITY;
+
+    // Calculate back screen size to fill entire viewport from camera's default position
+    const distance = camZ - backZ;
+    const fovRad = THREE.MathUtils.degToRad(CONFIG.CAMERA_FOV);
+    const backH = 2 * distance * Math.tan(fovRad / 2);
+    const backW = backH * (window.innerWidth / window.innerHeight);
+
+    const wallMat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: opacity,
+        side: THREE.DoubleSide,
+        roughness: 0.8,
+        metalness: 0.1
+    });
+
+    // Back screen (背面壁) — fills entire viewport when viewed from default camera
+    const backGeo = new THREE.PlaneGeometry(backW, backH);
+    boxStage.back = new THREE.Mesh(backGeo, wallMat.clone());
+    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
+    boxStage.back.receiveShadow = true;
+    gridRoom.add(boxStage.back);
+
+    // Left wall (左壁)
+    const sideGeo = new THREE.PlaneGeometry(depth, backH);
+    boxStage.left = new THREE.Mesh(sideGeo, wallMat.clone());
+    boxStage.left.rotation.y = Math.PI / 2;
+    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+    boxStage.left.receiveShadow = true;
+    gridRoom.add(boxStage.left);
+
+    // Right wall (右壁)
+    boxStage.right = new THREE.Mesh(sideGeo.clone(), wallMat.clone());
+    boxStage.right.rotation.y = -Math.PI / 2;
+    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+    boxStage.right.receiveShadow = true;
+    gridRoom.add(boxStage.right);
+
+    // Ceiling (天井)
+    const ceilingGeo = new THREE.PlaneGeometry(backW, depth);
+    boxStage.ceiling = new THREE.Mesh(ceilingGeo, wallMat.clone());
+    boxStage.ceiling.rotation.x = Math.PI / 2;
+    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
+    boxStage.ceiling.receiveShadow = true;
+    gridRoom.add(boxStage.ceiling);
+
+    debugLog(`Box stage created: backW=${backW.toFixed(1)}, backH=${backH.toFixed(1)}, depth=${depth}`);
 }
 
 function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+
+    // Update box stage dimensions on resize
+    updateBoxStageSize();
+}
+
+function updateBoxStageSize() {
+    if (!boxStage.back) return;
+
+    const backZ = CONFIG.BOX_STAGE.BACK_Z;
+    const camZ = CONFIG.CAMERA_POSITION.z;
+    const depth = CONFIG.BOX_STAGE.DEPTH;
+    const aspect = window.innerWidth / window.innerHeight;
+
+    const distance = camZ - backZ;
+    const fovRad = THREE.MathUtils.degToRad(CONFIG.CAMERA_FOV);
+    const backH = 2 * distance * Math.tan(fovRad / 2);
+    const backW = backH * aspect;
+
+    // Update back screen geometry
+    boxStage.back.geometry.dispose();
+    boxStage.back.geometry = new THREE.PlaneGeometry(backW, backH);
+    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
+
+    // Update left wall
+    boxStage.left.geometry.dispose();
+    boxStage.left.geometry = new THREE.PlaneGeometry(depth, backH);
+    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+
+    // Update right wall
+    boxStage.right.geometry.dispose();
+    boxStage.right.geometry = new THREE.PlaneGeometry(depth, backH);
+    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+
+    // Update ceiling
+    boxStage.ceiling.geometry.dispose();
+    boxStage.ceiling.geometry = new THREE.PlaneGeometry(backW, depth);
+    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
+
+    debugLog(`Box stage resized: backW=${backW.toFixed(1)}, backH=${backH.toFixed(1)}`);
 }
 
 function setupVideoBackground() {

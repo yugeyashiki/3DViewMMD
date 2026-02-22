@@ -32,22 +32,29 @@ const CONFIG = {
     LIGHT_INTENSITY: 1.5,
     AMBIENT_INTENSITY: 0.8,
 
-    // Box Stage (3D Room)
-    BOX_STAGE: {
-        BACK_Z: -50,          // バックスクリーンのZ位置
-        WALL_COLOR: 0x1a1a2e, // 壁面の色（床と統一）
-        WALL_OPACITY: 0.95,
-        DEPTH: 50,            // 箱の奥行き（カメラ側に向かっての長さ）
-    },
-
     // MMD Settings
     MMD: {
-        MODEL_PATH: './Models/model.pmx',
+        MODEL_PATH: './Models/Vcreate_mmd.pmx',
         MOTION_PATHS: [
             './Motions/ビリ モーション_01.vmd',
             './Motions/ビリ 表情・リップ_01.vmd'
         ],
         USE_PHYSICS: false
+    },
+
+    // Background MMD (複数パーツ構成)
+    BACKGROUND: {
+        // 読み込むPMXパーツ一覧
+        PARTS: [
+            './Background/01_Main.pmx',
+            './Background/02_StickLight.pmx',
+            './Background/03_Screen.pmx',
+            './Background/04_Emit.pmx'
+        ],
+        // 各パーツに適用するモーション（同一モーションを全パーツへ）
+        MOTION_PATH: './Background/モーション_サイリウムを振る.vmd',
+        SCALE: 1.0,           // キャラクターMMDと同スケールに統一
+        POSITION: { x: 0, y: 0, z: 0 }
     },
 
     // Zoom & Depth Settings (Dynamic Profiles)
@@ -87,7 +94,7 @@ let mesh = null;
 let helper = null;
 let clock = new THREE.Clock();
 let gridRoom = null;
-let boxStage = { back: null, left: null, right: null, ceiling: null };
+let bgMeshes = []; // Background MMD meshes (複数パーツ)
 
 // Virtual camera position to combine various inputs
 let targetCameraZ = CONFIG.CAMERA_POSITION.z;
@@ -114,8 +121,7 @@ let cameraInput;
 let userEyePosition = new THREE.Vector3(0, CONFIG.EYE_OFFSET_Y, CONFIG.EYE_POS_Z);
 const videoElement = document.getElementById('input_video');
 
-// --- Background Video ---
-let bgVideo, bgTexture, bgPlane;
+
 
 // --- Init ---
 async function init() {
@@ -145,11 +151,8 @@ async function init() {
         scene.add(pointLight);
 
         setupThreeJS();
-        // setupRoom
+        // Setup floor grid only (no walls/ceiling/video background)
         setupRoom();
-
-        // Background Video Setup
-        setupVideoBackground();
 
         camera.position.set(CONFIG.CAMERA_POSITION.x, CONFIG.CAMERA_POSITION.y, CONFIG.CAMERA_POSITION.z);
         camera.lookAt(CONFIG.CAMERA_LOOKAT.x, CONFIG.CAMERA_LOOKAT.y, CONFIG.CAMERA_LOOKAT.z);
@@ -157,15 +160,16 @@ async function init() {
         // MMD Animation Helper
         helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
 
-        // Load MMD
+        // Load Background MMD (all parts + motion)
+        await loadMMDBackground();
+
+        // Load character MMD
         await loadMMDAsync(CONFIG.MMD.MODEL_PATH, CONFIG.MMD.MOTION_PATHS);
         await setupFaceMesh();
 
-        // Sync: Reset clock, start animation, delay video by 1 second
-        if (bgVideo) bgVideo.currentTime = 0;
+        // Start animation
         clock = new THREE.Clock();
         animate();
-        setTimeout(() => startBackgroundVideo(), 1000);
 
     } catch (error) {
         showError('初期化エラー: ' + error.message);
@@ -232,150 +236,85 @@ function setupRoom() {
     gridRoom.add(floor);
 
     const grid = new THREE.GridHelper(100, 40, 0x555555, 0x222222);
-    grid.visible = true; // Visible for debugging
+    grid.visible = false;
     gridRoom.add(grid);
 
-    // --- 3D Box Stage (壁面・天井) ---
-    setupBoxStage();
-
     scene.add(gridRoom);
-}
-
-function setupBoxStage() {
-    const backZ = CONFIG.BOX_STAGE.BACK_Z;
-    const camZ = CONFIG.CAMERA_POSITION.z;
-    const depth = CONFIG.BOX_STAGE.DEPTH;
-    const color = CONFIG.BOX_STAGE.WALL_COLOR;
-    const opacity = CONFIG.BOX_STAGE.WALL_OPACITY;
-
-    // Calculate back screen size to fill entire viewport from camera's default position
-    const distance = camZ - backZ;
-    const fovRad = THREE.MathUtils.degToRad(CONFIG.CAMERA_FOV);
-    const backH = 2 * distance * Math.tan(fovRad / 2);
-    const backW = backH * (window.innerWidth / window.innerHeight);
-
-    const wallMat = new THREE.MeshStandardMaterial({
-        color: color,
-        transparent: true,
-        opacity: opacity,
-        side: THREE.DoubleSide,
-        roughness: 0.8,
-        metalness: 0.1
-    });
-
-    // Back screen (背面壁) — fills entire viewport when viewed from default camera
-    const backGeo = new THREE.PlaneGeometry(backW, backH);
-    boxStage.back = new THREE.Mesh(backGeo, wallMat.clone());
-    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
-    boxStage.back.receiveShadow = true;
-    gridRoom.add(boxStage.back);
-
-    // Left wall (左壁)
-    const sideGeo = new THREE.PlaneGeometry(depth, backH);
-    boxStage.left = new THREE.Mesh(sideGeo, wallMat.clone());
-    boxStage.left.rotation.y = Math.PI / 2;
-    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
-    boxStage.left.receiveShadow = true;
-    gridRoom.add(boxStage.left);
-
-    // Right wall (右壁)
-    boxStage.right = new THREE.Mesh(sideGeo.clone(), wallMat.clone());
-    boxStage.right.rotation.y = -Math.PI / 2;
-    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
-    boxStage.right.receiveShadow = true;
-    gridRoom.add(boxStage.right);
-
-    // Ceiling (天井)
-    const ceilingGeo = new THREE.PlaneGeometry(backW, depth);
-    boxStage.ceiling = new THREE.Mesh(ceilingGeo, wallMat.clone());
-    boxStage.ceiling.rotation.x = Math.PI / 2;
-    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
-    boxStage.ceiling.receiveShadow = true;
-    gridRoom.add(boxStage.ceiling);
-
-    debugLog(`Box stage created: backW=${backW.toFixed(1)}, backH=${backH.toFixed(1)}, depth=${depth}`);
 }
 
 function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-
-    // Update box stage dimensions on resize
-    updateBoxStageSize();
 }
 
-function updateBoxStageSize() {
-    if (!boxStage.back) return;
+// 背景MMD全パーツ＋モーションを読み込む
+async function loadMMDBackground() {
+    const { PARTS, MOTION_PATH, SCALE, POSITION } = CONFIG.BACKGROUND;
+    console.log(`🏗️ Loading ${PARTS.length} background MMD parts...`);
 
-    const backZ = CONFIG.BOX_STAGE.BACK_Z;
-    const camZ = CONFIG.CAMERA_POSITION.z;
-    const depth = CONFIG.BOX_STAGE.DEPTH;
-    const aspect = window.innerWidth / window.innerHeight;
+    // 全パーツを並列で読み込む
+    const loadPart = (modelPath) => new Promise((resolve) => {
+        const manager = new THREE.LoadingManager();
+        manager.onError = (url) => console.warn('[BG Loader] Failed to load texture:', url);
 
-    const distance = camZ - backZ;
-    const fovRad = THREE.MathUtils.degToRad(CONFIG.CAMERA_FOV);
-    const backH = 2 * distance * Math.tan(fovRad / 2);
-    const backW = backH * aspect;
+        const loader = new MMDLoader(manager);
+        loader.setResourcePath('./Background/');
 
-    // Update back screen geometry
-    boxStage.back.geometry.dispose();
-    boxStage.back.geometry = new THREE.PlaneGeometry(backW, backH);
-    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
+        loader.loadWithAnimation(modelPath, [MOTION_PATH], (mmd) => {
+            const partMesh = mmd.mesh;
 
-    // Update left wall
-    boxStage.left.geometry.dispose();
-    boxStage.left.geometry = new THREE.PlaneGeometry(depth, backH);
-    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+            const s = SCALE;
+            partMesh.scale.set(s, s, s);
+            partMesh.position.set(POSITION.x, POSITION.y, POSITION.z);
 
-    // Update right wall
-    boxStage.right.geometry.dispose();
-    boxStage.right.geometry = new THREE.PlaneGeometry(depth, backH);
-    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+            partMesh.traverse((obj) => {
+                if (obj.isMesh) {
+                    obj.castShadow = false;
+                    obj.receiveShadow = true;
+                }
+            });
 
-    // Update ceiling
-    boxStage.ceiling.geometry.dispose();
-    boxStage.ceiling.geometry = new THREE.PlaneGeometry(backW, depth);
-    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
+            scene.add(partMesh);
+            bgMeshes.push(partMesh);
 
-    debugLog(`Box stage resized: backW=${backW.toFixed(1)}, backH=${backH.toFixed(1)}`);
-}
+            // MMDAnimationHelperへ登録（キャラクターと同期再生）
+            helper.add(partMesh, {
+                animation: mmd.animation,
+                physics: false
+            });
 
-function setupVideoBackground() {
-    bgVideo = document.getElementById('bg-video');
-    if (!bgVideo) return;
+            console.log(`✅ BG part loaded: ${modelPath}`);
+            resolve();
+        },
+            (xhr) => {
+                if (xhr.lengthComputable) {
+                    debugLog(`BG [${modelPath.split('/').pop()}] ${Math.round(xhr.loaded / xhr.total * 100)}%`);
+                }
+            },
+            (error) => {
+                console.error(`❌ BG part load error: ${modelPath}`, error);
+                resolve(); // 1パーツ失敗しても他は続行
+            });
+    });
 
-    bgTexture = new THREE.VideoTexture(bgVideo);
-    bgTexture.colorSpace = THREE.SRGBColorSpace;
-
-    // Create a medium-sized plane behind the model
-    // Adjusted to be about half the previous size (80x45) for better parallax
-    const geometry = new THREE.PlaneGeometry(80, 45);
-    const material = new THREE.MeshBasicMaterial({ map: bgTexture, side: THREE.DoubleSide });
-    bgPlane = new THREE.Mesh(geometry, material);
-
-    // Position it far back and adjust height to be centered (y = half of height)
-    bgPlane.position.set(0, 22.5, -45);
-    scene.add(bgPlane);
-
-    debugLog('Background video texture initialized.');
-}
-
-async function startBackgroundVideo() {
-    if (bgVideo) {
-        try {
-            await bgVideo.play();
-            debugLog('Background video playback started.');
-        } catch (err) {
-            console.warn('Video play failed (needs interaction):', err);
-        }
-    }
+    await Promise.all(PARTS.map(loadPart));
+    console.log(`✅ All ${bgMeshes.length}/${PARTS.length} background parts loaded.`);
 }
 
 async function loadMMDAsync(modelUrl, motionUrls) {
     return new Promise((resolve, reject) => {
-        const loader = new MMDLoader();
-        debugLog('🎬 MMD Loading Start:', modelUrl, motionUrls);
+        // LoadingManager でテクスチャ読込エラーを捕捉
+        const manager = new THREE.LoadingManager();
+        manager.onStart = (url) => console.log('[Loader] Start:', url);
+        manager.onError = (url) => console.error('[Loader] ❌ FAILED to load:', url);
+
+        const loader = new MMDLoader(manager);
+
+        // テクスチャの解決パスを明示指定（モデルと同フォルダ）
+        loader.setResourcePath('./Models/');
+
+        console.log('🎬 MMD Loading Start:', modelUrl, motionUrls);
 
         loader.loadWithAnimation(modelUrl, motionUrls, (mmd) => {
             mesh = mmd.mesh;
@@ -389,18 +328,93 @@ async function loadMMDAsync(modelUrl, motionUrls) {
 
                     const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
                     materials.forEach((mat, idx) => {
-                        console.log(`Mesh: ${obj.name} | Material[${idx}]: ${mat.name}`);
-                        console.log(`  - Texture (map): ${mat.map ? '✅ Loaded' : '❌ MISSING (Model will be dark)'}`);
+                        const texStatus = mat.map ? '✅ Loaded' : '❌ MISSING';
+                        console.log(`Mesh: ${obj.name} | Mat[${idx}]: ${mat.name} | map: ${texStatus}`);
 
-                        // Force visibility if textures are missing
+                        // テクスチャがない場合のみグレーフォールバック
                         if (!mat.map) {
-                            mat.color.setHex(0xcccccc); // Set to grey to see the model
+                            mat.color.setHex(0xcccccc);
                         }
-                        mat.emissiveIntensity = 0.2; // Add slight self-glow for visibility
                     });
                 }
             });
             console.log('--------------------------------------');
+
+            // ============================================================
+            // 🔬 MATERIAL DEEP DIAGNOSTIC (transparent/face/highlight)
+            // ============================================================
+            console.log('--- 🔬 Deep Diagnostic: transparent/face/highlight materials ---');
+            mesh.traverse((obj) => {
+                if (!obj.isMesh) return;
+                const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+                materials.forEach((mat, idx) => {
+                    const n = (mat.name || '').toLowerCase();
+                    const isTarget = n.includes('transparent') || n.includes('face') || n.includes('highlight') || n.includes('ハイライト');
+                    if (isTarget) {
+                        console.group(`%c[DIAG] Mesh:"${obj.name}" Mat[${idx}]:"${mat.name}"`, 'color:#ff9900;font-weight:bold');
+                        console.log('  [1] envMap       :', mat.envMap ?? 'null (✅ none)');
+                        console.log('  [1] combine      :', mat.combine ?? 'N/A', '(0=Multiply,1=Mix,2=Add)');
+                        console.log('  [1] reflectivity :', mat.reflectivity ?? 'N/A');
+                        console.log('  [2] transparent  :', mat.transparent);
+                        console.log('  [2] opacity      :', mat.opacity);
+                        console.log('  [2] alphaTest    :', mat.alphaTest);
+                        console.log('  [3] depthWrite   :', mat.depthWrite);
+                        console.log('  [3] depthTest    :', mat.depthTest);
+                        console.log('  [4] renderOrder  :', obj.renderOrder);
+                        console.log('  [4] type         :', mat.type);
+                        console.groupEnd();
+                    }
+                });
+            });
+
+            // --- RenderOrder: 全Meshを一覧表示 ---
+            console.log('--- 📋 RenderOrder List (all meshes) ---');
+            const renderOrderList = [];
+            scene.traverse((obj) => {
+                if (obj.isMesh) {
+                    const matName = Array.isArray(obj.material) ? obj.material.map(m => m.name).join(',') : obj.material?.name;
+                    renderOrderList.push({ name: obj.name, matName, renderOrder: obj.renderOrder });
+                }
+            });
+            renderOrderList.sort((a, b) => a.renderOrder - b.renderOrder);
+            renderOrderList.forEach(r => console.log(`  renderOrder=${r.renderOrder} | mesh="${r.name}" | mat="${r.matName}"`));
+
+            // --- Scene environment / background ---
+            console.log('--- 🌍 Scene Environment ---');
+            console.log('  scene.background  :', scene.background);
+            console.log('  scene.environment :', scene.environment ?? 'null (✅ not set)');
+            console.log('--- 🔬 End of Deep Diagnostic ---');
+
+            // ============================================================
+            // 🔧 FIX: 透過マテリアルの設定を強制修正
+            // 原因: マテリアル名が "tranceparent"（スペルミス）のため
+            //       "transparent" の文字列検索で引っかからなかった
+            // ============================================================
+            mesh.traverse((obj) => {
+                if (!obj.isMesh) return;
+                const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+                let hasTransparent = false;
+                materials.forEach((mat) => {
+                    const n = (mat.name || '').toLowerCase();
+                    // "tranceparent"（スペルミス含む）"transparent" "highlight" "ハイライト" に対応
+                    const isTransparent = n.includes('tranceparent') || n.includes('transparent')
+                        || n.includes('highlight') || n.includes('ハイライト');
+                    if (isTransparent) {
+                        mat.transparent = true;   // アルファブレンディング有効化
+                        mat.alphaTest = 0.5;    // 透過境界をはっきりさせる
+                        mat.depthWrite = false;  // 透過物の定石: 深度書き込みOFF
+                        mat.reflectivity = 0;      // 反射値ゼロ
+                        mat.needsUpdate = true;
+                        hasTransparent = true;
+                        console.log(`%c[FIX] ✅ material fixed: "${mat.name}"`, 'color:#00ff88;font-weight:bold');
+                    }
+                });
+                // 透過マテリアルを持つMeshのrenderOrderを最前面に引き上げ
+                if (hasTransparent) {
+                    obj.renderOrder = 999;
+                    console.log(`%c[FIX] ✅ renderOrder=999 applied to mesh: "${obj.name}"`, 'color:#00ff88');
+                }
+            });
 
             scene.add(mesh);
 
@@ -409,7 +423,7 @@ async function loadMMDAsync(modelUrl, motionUrls) {
                 physics: CONFIG.MMD.USE_PHYSICS
             });
 
-            debugLog('✅ MMD Loaded successfully');
+            console.log('✅ MMD Loaded successfully');
             resolve();
         },
             (xhr) => {
@@ -420,7 +434,7 @@ async function loadMMDAsync(modelUrl, motionUrls) {
             },
             (error) => {
                 console.error('❌ MMD Loading Error:', error);
-                reject(new Error('MMDの読み込みに失敗しました。ファイルパスやテクスチャの欠落を確認してください。'));
+                reject(new Error('MMDの読み込みに失敗しました。'));
             });
     });
 }

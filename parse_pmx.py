@@ -1,6 +1,6 @@
 import re, struct
 
-with open(r'd:\AI3DViewMMD\Models\Vcreate_mmd.pmx', 'rb') as f:
+with open(r'd:\AI3DViewMMD\Models\角巻わため.pmx', 'rb') as f:
     data = f.read()
 
 enc = 'utf-16-le'

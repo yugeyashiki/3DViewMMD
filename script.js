@@ -36,25 +36,17 @@ const CONFIG = {
     MMD: {
         MODEL_PATH: './Models/Vcreate_mmd.pmx',
         MOTION_PATHS: [
-            './Motions/ビリ モーション_01.vmd',
-            './Motions/ビリ 表情・リップ_01.vmd'
+            './Motions/ワールドイズマイン.vmd'
         ],
         USE_PHYSICS: false
     },
 
-    // Background MMD (複数パーツ構成)
-    BACKGROUND: {
-        // 読み込むPMXパーツ一覧
-        PARTS: [
-            './Background/01_Main.pmx',
-            './Background/02_StickLight.pmx',
-            './Background/03_Screen.pmx',
-            './Background/04_Emit.pmx'
-        ],
-        // 各パーツに適用するモーション（同一モーションを全パーツへ）
-        MOTION_PATH: './Background/モーション_サイリウムを振る.vmd',
-        SCALE: 1.0,           // キャラクターMMDと同スケールに統一
-        POSITION: { x: 0, y: 0, z: 0 }
+    // Box Stage Settings
+    BOX_STAGE: {
+        BACK_Z: -50,            // バックスクリーンのZ位置
+        WALL_COLOR: 0x1a1a2e,   // 壁面の色
+        WALL_OPACITY: 0.95,     // 壁面の不透明度
+        DEPTH: 50               // 箱の奥行き（バックスクリーンから手前への長さ）
     },
 
     // Zoom & Depth Settings (Dynamic Profiles)
@@ -94,7 +86,8 @@ let mesh = null;
 let helper = null;
 let clock = new THREE.Clock();
 let gridRoom = null;
-let bgMeshes = []; // Background MMD meshes (複数パーツ)
+// Box Stage
+let boxStage = { back: null, left: null, right: null, ceiling: null };
 
 // Virtual camera position to combine various inputs
 let targetCameraZ = CONFIG.CAMERA_POSITION.z;
@@ -120,6 +113,106 @@ let faceMesh;
 let cameraInput;
 let userEyePosition = new THREE.Vector3(0, CONFIG.EYE_OFFSET_Y, CONFIG.EYE_POS_Z);
 const videoElement = document.getElementById('input_video');
+
+// --- HUD ---
+let hudVisible = true;
+let hudFaceDetected = false;
+let hudRawX = 0;   // nose.x 正規化値 -0.5〜0.5
+let hudRawY = 0;   // nose.y 正規化値 -0.5〜0.5
+let hudDepthZ = 0; // faceDepthOffset
+let lastHudLandmarks = null;  // ランドマーク描画用
+
+const hudEl = {
+    panel: () => document.getElementById('tracking-hud'),
+    status: () => document.getElementById('hud-face-status'),
+    x: () => document.getElementById('hud-x'),
+    y: () => document.getElementById('hud-y'),
+    z: () => document.getElementById('hud-z'),
+    barX: () => document.getElementById('bar-x'),
+    barY: () => document.getElementById('bar-y'),
+    barZ: () => document.getElementById('bar-z'),
+    lmCvs: () => document.getElementById('landmark-canvas'),
+};
+
+// バーUIを更新（-1〜1 → 中央が0、左端-1、右端+1）
+function setBar(barEl, val, maxAbs) {
+    if (!barEl) return;
+    const ratio = Math.max(-1, Math.min(1, val / maxAbs));  // -1〜1
+    const center = 50;  // %
+    if (ratio >= 0) {
+        barEl.style.left = center + '%';
+        barEl.style.width = (ratio * center) + '%';
+    } else {
+        barEl.style.left = (center + ratio * center) + '%';
+        barEl.style.width = (-ratio * center) + '%';
+    }
+}
+
+// HUDテキスト・バーの差分更新（rAF内で毎フレーム呼ぶ）
+function updateHud() {
+    if (!hudVisible) return;
+    const s = hudEl.status();
+    if (hudFaceDetected) {
+        s.textContent = '● DETECTED';
+        s.className = 'on';
+    } else {
+        s.textContent = '● NOT DETECTED';
+        s.className = 'off';
+    }
+    const xStr = hudRawX.toFixed(3);
+    const yStr = hudRawY.toFixed(3);
+    const zStr = hudDepthZ.toFixed(1);
+    if (hudEl.x().textContent !== xStr) hudEl.x().textContent = xStr;
+    if (hudEl.y().textContent !== yStr) hudEl.y().textContent = yStr;
+    if (hudEl.z().textContent !== zStr) hudEl.z().textContent = zStr;
+    setBar(hudEl.barX(), hudRawX, 0.5);
+    setBar(hudEl.barY(), hudRawY, 0.5);
+    setBar(hudEl.barZ(), hudDepthZ, 30);  // ±30程度の範囲を想定
+}
+
+// ランドマーク(鼻・目の内角4点)を overlay canvas に描画
+function drawLandmarks() {
+    const cvs = hudEl.lmCvs();
+    if (!cvs) return;
+    const ctx = cvs.getContext('2d');
+
+    // canvas サイズをウィンドウに合わせる（変化した場合のみ）
+    if (cvs.width !== window.innerWidth || cvs.height !== window.innerHeight) {
+        cvs.width = window.innerWidth;
+        cvs.height = window.innerHeight;
+    }
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+    if (!hudVisible || !hudFaceDetected || !lastHudLandmarks) return;
+
+    const lm = lastHudLandmarks;
+    const W = cvs.width, H = cvs.height;
+
+    // 描画するランドマーク index: 鼻先(1)、左目内角(133)、右目内角(362)、顎先(152)
+    const pointIndices = [1, 133, 362, 152, 10, 234, 454];
+    // カメラ映像がミラー反転しているため x を反転
+    const toScreen = (pt) => ({ sx: (1 - pt.x) * W, sy: pt.y * H });
+
+    // 点描画
+    ctx.fillStyle = 'rgba(100, 220, 255, 0.85)';
+    pointIndices.forEach(idx => {
+        if (!lm[idx]) return;
+        const { sx, sy } = toScreen(lm[idx]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 鼻先に十字マーカー
+    const nose = toScreen(lm[1]);
+    ctx.strokeStyle = 'rgba(255, 200, 60, 0.9)';
+    ctx.lineWidth = 1.5;
+    const cs = 10;  // cross size
+    ctx.beginPath();
+    ctx.moveTo(nose.sx - cs, nose.sy); ctx.lineTo(nose.sx + cs, nose.sy);
+    ctx.moveTo(nose.sx, nose.sy - cs); ctx.lineTo(nose.sx, nose.sy + cs);
+    ctx.stroke();
+}
 
 
 
@@ -159,9 +252,6 @@ async function init() {
 
         // MMD Animation Helper
         helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
-
-        // Load Background MMD (all parts + motion)
-        await loadMMDBackground();
 
         // Load character MMD
         await loadMMDAsync(CONFIG.MMD.MODEL_PATH, CONFIG.MMD.MOTION_PATHS);
@@ -225,8 +315,20 @@ function setupThreeJS() {
     });
 }
 
+function calculateBackScreenSize() {
+    const backZ = CONFIG.BOX_STAGE.BACK_Z;
+    const camZ = CONFIG.CAMERA_POSITION.z;
+    const distance = camZ - backZ;
+    const fovRad = THREE.MathUtils.degToRad(CONFIG.CAMERA_FOV);
+    const height = 2 * distance * Math.tan(fovRad / 2);
+    const width = height * (window.innerWidth / window.innerHeight);
+    return { width, height };
+}
+
 function setupRoom() {
     gridRoom = new THREE.Group();
+
+    // 床面
     const floorGeo = new THREE.PlaneGeometry(200, 200);
     const floorMat = new THREE.MeshPhongMaterial({ color: 0x1a1a2e, transparent: true, opacity: 0.9 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -235,72 +337,102 @@ function setupRoom() {
     floor.receiveShadow = true;
     gridRoom.add(floor);
 
-    const grid = new THREE.GridHelper(100, 40, 0x555555, 0x222222);
-    grid.visible = false;
-    gridRoom.add(grid);
+    // ボックスステージ（背面壁・左右壁・天井）
+    setupBoxStage(gridRoom);
 
     scene.add(gridRoom);
+}
+
+function setupBoxStage(parentGroup) {
+    const backZ = CONFIG.BOX_STAGE.BACK_Z;
+    const depth = CONFIG.BOX_STAGE.DEPTH;
+    const color = CONFIG.BOX_STAGE.WALL_COLOR;
+    const opacity = CONFIG.BOX_STAGE.WALL_OPACITY;
+    const { width: backW, height: backH } = calculateBackScreenSize();
+
+    const wallMat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: opacity,
+        side: THREE.DoubleSide,
+        roughness: 0.8,
+        metalness: 0.1
+    });
+
+    // ① バックスクリーン（背面壁）
+    boxStage.back = new THREE.Mesh(
+        new THREE.PlaneGeometry(backW, backH),
+        wallMat.clone()
+    );
+    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
+    boxStage.back.receiveShadow = true;
+    parentGroup.add(boxStage.back);
+
+    // ② 左壁
+    boxStage.left = new THREE.Mesh(
+        new THREE.PlaneGeometry(depth, backH),
+        wallMat.clone()
+    );
+    boxStage.left.rotation.y = Math.PI / 2;
+    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+    boxStage.left.receiveShadow = true;
+    parentGroup.add(boxStage.left);
+
+    // ③ 右壁
+    boxStage.right = new THREE.Mesh(
+        new THREE.PlaneGeometry(depth, backH),
+        wallMat.clone()
+    );
+    boxStage.right.rotation.y = -Math.PI / 2;
+    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+    boxStage.right.receiveShadow = true;
+    parentGroup.add(boxStage.right);
+
+    // ④ 天井
+    boxStage.ceiling = new THREE.Mesh(
+        new THREE.PlaneGeometry(backW, depth),
+        wallMat.clone()
+    );
+    boxStage.ceiling.rotation.x = Math.PI / 2;
+    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
+    boxStage.ceiling.receiveShadow = true;
+    parentGroup.add(boxStage.ceiling);
+
+    console.log(`✅ Box stage created: backW=${backW.toFixed(1)}, backH=${backH.toFixed(1)}, Z=${backZ}`);
+}
+
+function updateBoxStageSize() {
+    if (!boxStage.back) return;
+
+    const backZ = CONFIG.BOX_STAGE.BACK_Z;
+    const depth = CONFIG.BOX_STAGE.DEPTH;
+    const { width: backW, height: backH } = calculateBackScreenSize();
+
+    boxStage.back.geometry.dispose();
+    boxStage.back.geometry = new THREE.PlaneGeometry(backW, backH);
+    boxStage.back.position.set(0, backH / 2 - 0.1, backZ);
+
+    boxStage.left.geometry.dispose();
+    boxStage.left.geometry = new THREE.PlaneGeometry(depth, backH);
+    boxStage.left.position.set(-backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+
+    boxStage.right.geometry.dispose();
+    boxStage.right.geometry = new THREE.PlaneGeometry(depth, backH);
+    boxStage.right.position.set(backW / 2, backH / 2 - 0.1, backZ + depth / 2);
+
+    boxStage.ceiling.geometry.dispose();
+    boxStage.ceiling.geometry = new THREE.PlaneGeometry(backW, depth);
+    boxStage.ceiling.position.set(0, backH - 0.1, backZ + depth / 2);
 }
 
 function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    updateBoxStageSize();
 }
 
-// 背景MMD全パーツ＋モーションを読み込む
-async function loadMMDBackground() {
-    const { PARTS, MOTION_PATH, SCALE, POSITION } = CONFIG.BACKGROUND;
-    console.log(`🏗️ Loading ${PARTS.length} background MMD parts...`);
 
-    // 全パーツを並列で読み込む
-    const loadPart = (modelPath) => new Promise((resolve) => {
-        const manager = new THREE.LoadingManager();
-        manager.onError = (url) => console.warn('[BG Loader] Failed to load texture:', url);
-
-        const loader = new MMDLoader(manager);
-        loader.setResourcePath('./Background/');
-
-        loader.loadWithAnimation(modelPath, [MOTION_PATH], (mmd) => {
-            const partMesh = mmd.mesh;
-
-            const s = SCALE;
-            partMesh.scale.set(s, s, s);
-            partMesh.position.set(POSITION.x, POSITION.y, POSITION.z);
-
-            partMesh.traverse((obj) => {
-                if (obj.isMesh) {
-                    obj.castShadow = false;
-                    obj.receiveShadow = true;
-                }
-            });
-
-            scene.add(partMesh);
-            bgMeshes.push(partMesh);
-
-            // MMDAnimationHelperへ登録（キャラクターと同期再生）
-            helper.add(partMesh, {
-                animation: mmd.animation,
-                physics: false
-            });
-
-            console.log(`✅ BG part loaded: ${modelPath}`);
-            resolve();
-        },
-            (xhr) => {
-                if (xhr.lengthComputable) {
-                    debugLog(`BG [${modelPath.split('/').pop()}] ${Math.round(xhr.loaded / xhr.total * 100)}%`);
-                }
-            },
-            (error) => {
-                console.error(`❌ BG part load error: ${modelPath}`, error);
-                resolve(); // 1パーツ失敗しても他は続行
-            });
-    });
-
-    await Promise.all(PARTS.map(loadPart));
-    console.log(`✅ All ${bgMeshes.length}/${PARTS.length} background parts loaded.`);
-}
 
 async function loadMMDAsync(modelUrl, motionUrls) {
     return new Promise((resolve, reject) => {
@@ -311,7 +443,8 @@ async function loadMMDAsync(modelUrl, motionUrls) {
 
         const loader = new MMDLoader(manager);
 
-        // テクスチャの解決パスを明示指定（モデルと同フォルダ）
+        // テクスチャの解決パスを明示指定
+        // PMX内パスが「textures/filename.png」形式のため ./Models/ を基点にする
         loader.setResourcePath('./Models/');
 
         console.log('🎬 MMD Loading Start:', modelUrl, motionUrls);
@@ -433,8 +566,11 @@ async function loadMMDAsync(modelUrl, motionUrls) {
                 }
             },
             (error) => {
-                console.error('❌ MMD Loading Error:', error);
-                reject(new Error('MMDの読み込みに失敗しました。'));
+                console.error('❌ MMD Loading Error (detail):', error);
+                console.error('  message:', error?.message ?? error);
+                console.error('  stack  :', error?.stack ?? '(no stack)');
+                const detail = error?.message ?? String(error) ?? '詳細不明';
+                reject(new Error(`MMDの読み込みに失敗しました。\n${detail}`));
             });
     });
 }
@@ -527,23 +663,19 @@ async function setupFaceMesh() {
 
         // --- Keyboard Shortcuts ---
         window.addEventListener('keydown', (e) => {
-            // H Key: Toggle camera window visibility
+            // H Key: Toggle HUD (face tracking display) visibility
             if (e.key.toLowerCase() === 'h') {
-                const container = document.getElementById('video-container');
-                if (container) {
-                    const isHidden = container.style.display === 'none';
-                    container.style.display = isHidden ? 'block' : 'none';
-                    debugLog(`Camera window ${isHidden ? 'shown' : 'hidden'} via H key`);
-                }
+                hudVisible = !hudVisible;
+                const hud = hudEl.panel();
+                const lmCvs = hudEl.lmCvs();
+                if (hud) hud.style.display = hudVisible ? '' : 'none';
+                if (lmCvs) lmCvs.style.display = hudVisible ? '' : 'none';
+                debugLog(`HUD ${hudVisible ? 'shown' : 'hidden'} via H key`);
             }
-            // Space Key: Pause/Resume animation & background video
+            // Space Key: Pause/Resume animation
             if (e.code === 'Space') {
                 e.preventDefault();
                 isPaused = !isPaused;
-                const bgVideo = document.getElementById('bg-video');
-                if (bgVideo) {
-                    isPaused ? bgVideo.pause() : bgVideo.play();
-                }
                 debugLog(`Animation ${isPaused ? 'PAUSED ⏸' : 'RESUMED ▶'}`);
             }
         });
@@ -562,7 +694,7 @@ async function setupFaceMesh() {
         };
         processFrame();
 
-        // Camera window is hidden by default. Press 'H' to toggle visibility.
+        // HUD is shown by default. Press 'H' to toggle visibility.
     } catch (error) {
         showError('カメラの起動に失敗しました: ' + error.message);
     }
@@ -614,12 +746,16 @@ async function startCamera(selectedDevice) {
 }
 
 function onFaceResults(results) {
+    // HUD: 検出状態を更新
+    hudFaceDetected = !!(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0);
+    lastHudLandmarks = hudFaceDetected ? results.multiFaceLandmarks[0] : null;
+
     // Throttled logging for detection status
     if (DEBUG_MODE) {
         if (!window._lastLogTime) window._lastLogTime = 0;
         const now = Date.now();
         if (now - window._lastLogTime > 2000) {
-            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            if (hudFaceDetected) {
                 console.log('[FaceMesh] Face detected! Tracking active.');
             } else {
                 console.warn('[FaceMesh] Camera is on, but NO face detected. Check video preview.');
@@ -628,7 +764,7 @@ function onFaceResults(results) {
         }
     }
 
-    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+    if (hudFaceDetected) {
         const landmarks = results.multiFaceLandmarks[0];
         updateTracking(landmarks);
     }
@@ -640,6 +776,10 @@ function updateTracking(lm) {
     // Normalized screen offset (-0.5 to 0.5)
     const rawX = (nose.x - 0.5);
     const rawY = -(nose.y - 0.5);
+
+    // HUD raw values
+    hudRawX = rawX;
+    hudRawY = rawY;
 
     // Target change based on face movement
     const targetX = rawX * CONFIG.MONITOR_WIDTH * CONFIG.EYE_SCALE_X;
@@ -663,6 +803,7 @@ function updateTracking(lm) {
     // Larger currentDist means face is closer. Offset is negative (toward model).
     const depthChange = (currentDist - baseFaceDistance) * currentConfig.FACE_DEPTH_FACTOR;
     faceDepthOffset = THREE.MathUtils.lerp(faceDepthOffset, -depthChange, currentConfig.FACE_DEPTH_LERP);
+    hudDepthZ = faceDepthOffset;  // HUD用に同期
 
     // Occasional debug log for distance changes
     if (DEBUG_MODE && Math.random() < 0.01) {
@@ -713,6 +854,10 @@ function animate() {
     }
 
     renderer.render(scene, camera);
+
+    // HUD & landmark overlay update (same rAF loop)
+    updateHud();
+    drawLandmarks();
 }
 
 init();

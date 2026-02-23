@@ -82,6 +82,116 @@
         .hidden {
             display: none !important;
         }
+
+        /* ===== Face Tracking HUD ===== */
+        #tracking-hud {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            width: 220px;
+            background: rgba(0, 0, 0, 0.60);
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            padding: 10px 14px 12px;
+            z-index: 9998;
+            font-family: 'Segoe UI', 'Consolas', monospace;
+            font-size: 11px;
+            color: #e0e0e0;
+            user-select: none;
+            pointer-events: none;
+        }
+
+        #tracking-hud .hud-title {
+            font-size: 10px;
+            font-weight: bold;
+            letter-spacing: 0.08em;
+            color: #94d2ff;
+            margin-bottom: 7px;
+            text-transform: uppercase;
+        }
+
+        #tracking-hud .hud-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 5px;
+        }
+
+        #tracking-hud .hud-label {
+            width: 50px;
+            color: #aaa;
+            flex-shrink: 0;
+        }
+
+        #tracking-hud .hud-val {
+            width: 44px;
+            text-align: right;
+            flex-shrink: 0;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
+
+        #tracking-hud .hud-bar-bg {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 3px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #tracking-hud .hud-bar-fill {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            border-radius: 3px;
+            transition: left 0.05s linear, width 0.05s linear;
+        }
+
+        .bar-x {
+            background: #4fc3f7;
+        }
+
+        .bar-y {
+            background: #a5d6a7;
+        }
+
+        .bar-z {
+            background: #ffcc80;
+        }
+
+        #hud-face-status {
+            display: inline-block;
+            padding: 1px 7px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        #hud-face-status.on {
+            background: rgba(0, 220, 100, 0.25);
+            color: #4cffaa;
+            border: 1px solid #4cffaa55;
+        }
+
+        #hud-face-status.off {
+            background: rgba(220, 60, 60, 0.25);
+            color: #ff7070;
+            border: 1px solid #ff707055;
+        }
+
+        /* ランドマーク overlay canvas */
+        #landmark-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 9997;
+        }
     </style>
 </head>
 
@@ -155,10 +265,36 @@
         </div>
     </div>
 
-    <!-- Background Video -->
-    <video id="bg-video" loop playsinline muted style="display:none;">
-        <source src="Videos/biri_sabi_1.mp4" type="video/mp4">
-    </video>
+    <!-- Face Tracking HUD -->
+    <canvas id="landmark-canvas"></canvas>
+    <div id="tracking-hud">
+        <div class="hud-title">📡 Face Tracking</div>
+        <span id="hud-face-status" class="off">● NOT DETECTED</span>
+        <!-- X -->
+        <div class="hud-row">
+            <span class="hud-label">Track X</span>
+            <span class="hud-val" id="hud-x">---</span>
+            <div class="hud-bar-bg">
+                <div class="hud-bar-fill bar-x" id="bar-x" style="left:50%;width:0%;"></div>
+            </div>
+        </div>
+        <!-- Y -->
+        <div class="hud-row">
+            <span class="hud-label">Track Y</span>
+            <span class="hud-val" id="hud-y">---</span>
+            <div class="hud-bar-bg">
+                <div class="hud-bar-fill bar-y" id="bar-y" style="left:50%;width:0%;"></div>
+            </div>
+        </div>
+        <!-- Z -->
+        <div class="hud-row">
+            <span class="hud-label">Depth Z</span>
+            <span class="hud-val" id="hud-z">---</span>
+            <div class="hud-bar-bg">
+                <div class="hud-bar-fill bar-z" id="bar-z" style="left:50%;width:0%;"></div>
+            </div>
+        </div>
+    </div>
 
     <!-- Three.js and Logic -->
     <script type="module" src="/script.js?v=MMD_001"></script>

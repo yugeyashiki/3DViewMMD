@@ -108,6 +108,9 @@ const DRAG_SENSITIVITY = 0.3;
 // --- Pause Control ---
 let isPaused = false;
 
+// --- Auto Reload Control ---
+let isReloading = false;
+
 // --- MediaPipe ---
 let faceMesh;
 let cameraInput;
@@ -115,7 +118,7 @@ let userEyePosition = new THREE.Vector3(0, CONFIG.EYE_OFFSET_Y, CONFIG.EYE_POS_Z
 const videoElement = document.getElementById('input_video');
 
 // --- HUD ---
-let hudVisible = true;
+let hudVisible = false;
 let hudFaceDetected = false;
 let hudRawX = 0;   // nose.x 正規化値 -0.5〜0.5
 let hudRawY = 0;   // nose.y 正規化値 -0.5〜0.5
@@ -861,3 +864,84 @@ function animate() {
 }
 
 init();
+
+// ============================================================
+// 🔄 Auto-Reload: Vite HMR でモデル/モーション変更を検知して再ロード
+// ============================================================
+
+/**
+ * 現在ロード済みの MMD メッシュをシーンから除去し、
+ * 最新のファイルで再ロードする
+ */
+async function reloadMMD() {
+    if (isReloading) return;
+    isReloading = true;
+
+    console.log('%c[Auto-Reload] 🔄 MMD re-loading...', 'color:#00ffff;font-weight:bold');
+
+    try {
+        // 1. 旧モデルをシーン・helper から削除
+        if (mesh) {
+            helper.remove(mesh);
+            scene.remove(mesh);
+            mesh.traverse((obj) => {
+                if (obj.isMesh) {
+                    obj.geometry?.dispose();
+                    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                    mats.forEach(m => m?.dispose());
+                }
+            });
+            mesh = null;
+        }
+
+        // 2. 物理 helper をリセット
+        helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
+
+        // 3. クロックをリセット
+        clock = new THREE.Clock();
+        baseFaceDistance = null;  // 顔距離キャリブレーションもリセット
+
+        // 4. サーバーから最新ファイル一覧を取得して再ロード
+        const res = await fetch('/__mmd_assets');
+        const assets = await res.json();
+
+        // Models/ から最初の .pmx を、Motions/ から全 .vmd を使う
+        const modelFile = (assets['Models'] || []).find(f => f.endsWith('.pmx'));
+        const motionFiles = (assets['Motions'] || []).filter(f => f.endsWith('.vmd'));
+
+        if (!modelFile) {
+            console.warn('[Auto-Reload] ⚠ No .pmx file found in Models/');
+            isReloading = false;
+            return;
+        }
+        if (motionFiles.length === 0) {
+            console.warn('[Auto-Reload] ⚠ No .vmd file found in Motions/');
+            isReloading = false;
+            return;
+        }
+
+        // キャッシュバスターを付与してブラウザキャッシュを回避
+        const bust = `?t=${Date.now()}`;
+        const modelUrl = modelFile + bust;
+        const motionUrls = motionFiles.map(f => f + bust);
+
+        console.log(`[Auto-Reload] Model : ${modelFile}`);
+        console.log(`[Auto-Reload] Motion: ${motionFiles.join(', ')}`);
+
+        await loadMMDAsync(modelUrl, motionUrls);
+        console.log('%c[Auto-Reload] ✅ Done!', 'color:#00ff88;font-weight:bold');
+
+    } catch (err) {
+        console.error('[Auto-Reload] ❌ Failed:', err);
+    } finally {
+        isReloading = false;
+    }
+}
+
+// Vite HMR: カスタムイベント受信
+if (import.meta.hot) {
+    import.meta.hot.on('mmd:asset-changed', (data) => {
+        console.log(`[HMR] 📁 Asset changed: ${data.path} (${data.assetType})`);
+        reloadMMD();
+    });
+}

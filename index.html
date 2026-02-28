@@ -192,12 +192,211 @@
             pointer-events: none;
             z-index: 9997;
         }
+
+        /* ===== Upload Screen ===== */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        #upload-screen {
+            position: fixed;
+            inset: 0;
+            background: linear-gradient(135deg, #0f0c29 0%, #1a1a2e 50%, #16213e 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 99999;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            color: #e2e8f0;
+            gap: 32px;
+            padding: 20px;
+        }
+
+        #upload-screen h1 {
+            margin: 0;
+            font-size: clamp(22px, 4vw, 36px);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(90deg, #818cf8, #c084fc, #38bdf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-align: center;
+        }
+
+        #upload-screen p.subtitle {
+            margin: -20px 0 0;
+            font-size: 14px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .upload-zones {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+            max-width: 760px;
+        }
+
+        .drop-zone {
+            flex: 1;
+            min-width: 280px;
+            max-width: 360px;
+            border: 2px dashed rgba(129, 140, 248, 0.35);
+            border-radius: 16px;
+            padding: 32px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(8px);
+            position: relative;
+            user-select: none;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            border-color: #818cf8;
+            background: rgba(129, 140, 248, 0.10);
+            transform: translateY(-3px);
+            box-shadow: 0 12px 40px rgba(129, 140, 248, 0.2);
+        }
+
+        .drop-zone.file-ready {
+            border-color: #34d399;
+            background: rgba(52, 211, 153, 0.08);
+        }
+
+        .drop-zone .zone-icon {
+            font-size: 40px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .drop-zone .zone-label {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin-bottom: 8px;
+        }
+
+        .drop-zone .zone-ext {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            background: rgba(129, 140, 248, 0.15);
+            color: #818cf8;
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 14px;
+        }
+
+        .drop-zone .zone-desc {
+            font-size: 12px;
+            color: #475569;
+            line-height: 1.5;
+        }
+
+        .drop-zone .zone-status {
+            margin-top: 14px;
+            font-size: 12px;
+            font-weight: 500;
+            min-height: 18px;
+            transition: all 0.2s;
+        }
+
+        .drop-zone .zone-status.ready {
+            color: #34d399;
+        }
+
+        .drop-zone input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+
+        #start-btn {
+            padding: 14px 48px;
+            font-size: 16px;
+            font-weight: 700;
+            font-family: inherit;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            letter-spacing: 0.03em;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 20px rgba(79, 70, 229, 0.4);
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        #start-btn.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        #start-btn.active:hover {
+            transform: translateY(-2px) scale(1.03);
+            box-shadow: 0 8px 30px rgba(79, 70, 229, 0.6);
+        }
+
+        .upload-note {
+            font-size: 11px;
+            color: #334155;
+            text-align: center;
+            max-width: 500px;
+            line-height: 1.6;
+        }
     </style>
 </head>
 
 <body>
+    <!-- File Upload Screen -->
+    <div id="upload-screen">
+        <h1>🎭 MMD Web 3D Viewer</h1>
+        <p class="subtitle">あなたの PMX モデルと VMD モーションをアップロードして始めましょう</p>
+
+        <div class="upload-zones">
+            <!-- PMX Drop Zone (フォルダ選択) -->
+            <div class="drop-zone" id="pmx-zone">
+                <input type="file" id="pmx-input" webkitdirectory directory multiple />
+                <span class="zone-icon">🧩</span>
+                <div class="zone-label">MMD Model Folder</div>
+                <div class="zone-ext">.pmx + textures/</div>
+                <div class="zone-desc">クリックまたはフォルダをドロップ<br>モデルフォルダを丸ごと選択<br><small style="color:#334155">(例: MyModel/ →
+                        model.pmx, textures/)</small></div>
+                <div class="zone-status" id="pmx-status">未選択</div>
+            </div>
+
+            <!-- VMD Drop Zone -->
+            <div class="drop-zone" id="vmd-zone">
+                <input type="file" id="vmd-input" accept=".vmd" multiple />
+                <span class="zone-icon">💃</span>
+                <div class="zone-label">Motion Data</div>
+                <div class="zone-ext">.vmd × 複数可</div>
+                <div class="zone-desc">クリックまたはファイルをドロップ<br>モーションファイル（.vmd）</div>
+                <div class="zone-status" id="vmd-status">未選択</div>
+            </div>
+        </div>
+
+        <button id="start-btn">▶ 再生開始</button>
+
+        <p class="upload-note">
+            🔒 アップロードされたファイルはブラウザ内のみで処理され、外部サーバーへ送信されません。<br>
+            ページを閉じるとデータはリセットされます。
+        </p>
+    </div>
+
     <div id="consent-overlay"
-        style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); display: flex; align-items: center; justify-content: center; z-index: 9999;">
+        style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); display: none; align-items: center; justify-content: center; z-index: 9999;">
         <div id="consent-box"
             style="background: linear-gradient(135deg, #1e3a8a 0%, #1e293b 100%); color: #fff; padding: 40px; border-radius: 16px; max-width: 500px; text-align: center; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);">
             <h2 style="margin-bottom: 20px; font-size: 24px;">📹 カメラアクセスの許可</h2>
@@ -266,8 +465,8 @@
     </div>
 
     <!-- Face Tracking HUD -->
-    <canvas id="landmark-canvas"></canvas>
-    <div id="tracking-hud">
+    <canvas id="landmark-canvas" style="display:none;"></canvas>
+    <div id="tracking-hud" style="display:none;">
         <div class="hud-title">📡 Face Tracking</div>
         <span id="hud-face-status" class="off">● NOT DETECTED</span>
         <!-- X -->

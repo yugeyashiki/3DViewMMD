@@ -16,8 +16,8 @@ const CONFIG = {
     CAMERA_FOV: 20,            // Slightly wider to show more of the pulled-back scene
     CAMERA_NEAR: 0.1,
     CAMERA_FAR: 1000.0,
-    CAMERA_POSITION: { x: 0, y: 12, z: 75 }, // Pulsed further back for "引き" shot
-    CAMERA_LOOKAT: { x: 0, y: 10, z: 0 },
+    CAMERA_POSITION: { x: 0, y: 12, z: 110 }, // Pulsed further back for "引き" shot
+    CAMERA_LOOKAT: { x: 0, y: 15, z: 0 },
 
     // Face Tracking
     EYE_SCALE_X: 20.0,         // Further increased sensitivity
@@ -34,10 +34,8 @@ const CONFIG = {
 
     // MMD Settings
     MMD: {
-        MODEL_PATH: './Models/Vcreate_mmd.pmx',
-        MOTION_PATHS: [
-            './Motions/ワールドイズマイン.vmd'
-        ],
+        MODEL_PATH: '',       // アップロード UI または /__mmd_assets で動的に設定される
+        MOTION_PATHS: [],
         USE_PHYSICS: false
     },
 
@@ -220,7 +218,7 @@ function drawLandmarks() {
 
 
 // --- Init ---
-async function init() {
+async function init(modelUrl, motionUrls) {
     try {
         scene = new THREE.Scene();
         scene.background = new THREE.Color(CONFIG.BACKGROUND_COLOR);
@@ -257,7 +255,7 @@ async function init() {
         helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
 
         // Load character MMD
-        await loadMMDAsync(CONFIG.MMD.MODEL_PATH, CONFIG.MMD.MOTION_PATHS);
+        await loadMMDAsync(modelUrl, motionUrls);
         await setupFaceMesh();
 
         // Start animation
@@ -589,6 +587,9 @@ async function requestCameraPermission() {
             return;
         }
 
+        // display:none から flex に切り替えてダイアログを表示
+        consentOverlay.style.display = 'flex';
+
         allowButton.onclick = () => {
             consentOverlay.style.display = 'none';
             resolve();
@@ -863,7 +864,35 @@ function animate() {
     drawLandmarks();
 }
 
-init();
+// ============================================================
+// 🚀 Startup: upload-screen が存在すればアップロード待機、
+//            なければ /__mmd_assets から自動取得して起動
+// ============================================================
+(async () => {
+    const uploadScreen = document.getElementById('upload-screen');
+    if (uploadScreen) {
+        // ブラウザアップロード UI モード: DOMContentLoaded のイベントハンドラに任せる
+        console.log('[Startup] 📤 Upload UI mode — waiting for file selection.');
+        return;
+    }
+
+    // upload-screen が存在しない場合: /__mmd_assets エンドポイントから取得して自動起動
+    try {
+        const res = await fetch('/__mmd_assets');
+        const assets = await res.json();
+        const modelFile = (assets['Models'] || []).find(f => f.endsWith('.pmx'));
+        const motionFiles = (assets['Motions'] || []).filter(f => f.endsWith('.vmd'));
+        if (modelFile && motionFiles.length > 0) {
+            console.log('[Startup] 🗂 Auto-loading from /__mmd_assets:', modelFile);
+            await init(modelFile, motionFiles);
+        } else {
+            console.warn('[Startup] ⚠ No model/motion found in /__mmd_assets.');
+        }
+    } catch {
+        console.warn('[Startup] /__mmd_assets not available (production mode?).');
+    }
+})();
+
 
 // ============================================================
 // 🔄 Auto-Reload: Vite HMR でモデル/モーション変更を検知して再ロード
@@ -945,3 +974,284 @@ if (import.meta.hot) {
         reloadMMD();
     });
 }
+
+// ============================================================
+// 📤 Upload UI Logic
+// ============================================================
+
+let uploadedPmxFile = null;  // PMX ファイル (File オブジェクト)
+let uploadedVmdFiles = [];    // VMD ファイルの配列
+let uploadedAllFiles = [];    // フォルダ内の全ファイル（テクスチャ含む）
+
+/**
+ * フォルダ内のファイル一覧から テクスチャ URL マップを生成する
+ * key = ファイル名 or 相対パス（フォルダ名以降）
+ * value = Object URL
+ */
+function buildFileMap(files) {
+    const map = new Map();
+    for (const file of files) {
+        // webkitRelativePath = "ModelFolder/textures/body.png"
+        const rel = file.webkitRelativePath || file.name;
+        const parts = rel.split('/');
+
+        // フォルダ名を除いたパス (例: "textures/body.png")
+        const pathFromRoot = parts.slice(1).join('/');
+        const filename = parts[parts.length - 1];
+        const url = URL.createObjectURL(file);
+
+        if (pathFromRoot) map.set(pathFromRoot, url);
+        map.set(filename, url);
+        // バックスラッシュ版も登録（Windows パス対策）
+        if (pathFromRoot) map.set(pathFromRoot.replace(/\//g, '\\'), url);
+    }
+    return map;
+}
+
+/**
+ * アップロードされたファイルで MMD を初期化する
+ * - loader.loadPMX() / loader.loadVMD() を直接呼び出し
+ *   → blob: URL に拡張子がなくても動作する
+ * - LoadingManager.setURLModifier() でテクスチャ解決
+ */
+async function loadMMDFromFiles(pmxFile, vmdFiles, allFiles) {
+    return new Promise((resolve, reject) => {
+        // テクスチャ URL マップを構築
+        const fileMap = buildFileMap(allFiles.length > 0 ? allFiles : [pmxFile]);
+
+        // カスタム LoadingManager でテクスチャを blob URL にリダイレクト
+        const manager = new THREE.LoadingManager();
+        manager.onStart = (url) => console.log('[Loader] Start:', url);
+        manager.onError = (url) => console.warn('[Loader] Not found (may be OK):', url);
+
+        manager.setURLModifier((url) => {
+            // blob URL または data URL はそのまま
+            if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+            // ファイル名で検索
+            const decoded = decodeURIComponent(url);
+            const filename = decoded.split(/[/\\]/).pop().split('?')[0];
+
+            // 相対パス（textures/body.png 形式）で検索
+            const pathPart = decoded.replace(/^.*?(?=[^/\\]*[/\\][^/\\]*$)/, '')
+                .replace(/^[./\\]+/, '');
+
+            if (fileMap.has(pathPart)) {
+                console.log(`[Loader] ✅ Texture mapped: ${filename}`);
+                return fileMap.get(pathPart);
+            }
+            if (fileMap.has(filename)) {
+                console.log(`[Loader] ✅ Texture by name: ${filename}`);
+                return fileMap.get(filename);
+            }
+            // フォールバック: 元の URL をそのまま返す
+            return url;
+        });
+
+        const loader = new MMDLoader(manager);
+        const pmxBlobUrl = URL.createObjectURL(pmxFile);
+
+        console.log('[Upload] 🔧 Loading PMX via loadPMX():', pmxFile.name);
+
+        // ① PMX を直接ロード（拡張子チェックをバイパス）
+        loader.loadPMX(pmxBlobUrl, (pmxData) => {
+            // MeshBuilder でメッシュを組み立て（テクスチャ解決はここで行われる）
+            // setCrossOrigin() は MeshBuilder を返す。setResourcePath() は MaterialBuilder のメソッドなので直接呼べない。
+            // resourcePath は build() の第2引数で渡す（空文字 = URLModifier に任せる）
+            loader.meshBuilder.setCrossOrigin('anonymous');
+            const localMesh = loader.meshBuilder.build(pmxData, '', undefined, (err) => {
+                console.warn('[Upload] Mesh build warning:', err);
+            });
+
+            // ② VMD を直接ロード
+            const vmdBlobUrls = vmdFiles.map(f => URL.createObjectURL(f));
+            loader.loadVMD(vmdBlobUrls, (vmd) => {
+                const animation = loader.animationBuilder.build(vmd, localMesh);
+                resolve({ mesh: localMesh, animation });
+            }, undefined, reject);
+
+        }, undefined, reject);
+    });
+}
+
+/**
+ * アップロード画面を閉じ、MMD を初期化する
+ */
+async function startFromUpload() {
+    if (!uploadedPmxFile) return;
+
+    const screen = document.getElementById('upload-screen');
+    if (screen) {
+        screen.style.transition = 'opacity 0.4s ease';
+        screen.style.opacity = '0';
+        setTimeout(() => screen.style.display = 'none', 400);
+    }
+
+    console.log('[Upload] 📤 PMX:', uploadedPmxFile.name);
+    console.log('[Upload] 💃 VMD:', uploadedVmdFiles.map(f => f.name).join(', '));
+    console.log('[Upload] 📁 Total files:', uploadedAllFiles.length);
+
+    try {
+        // 通常の init() を呼ぶが、loadMMDAsync の代わりに loadMMDFromFiles を使う
+        // シーン・カメラ・ライトのセットアップだけ先に行う
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(CONFIG.BACKGROUND_COLOR);
+
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+        hemiLight.position.set(0, 20, 0);
+        scene.add(hemiLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, CONFIG.LIGHT_INTENSITY);
+        dirLight.position.set(5, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        const ambient = new THREE.AmbientLight(0xffffff, CONFIG.AMBIENT_INTENSITY);
+        scene.add(ambient);
+
+        const pointLight = new THREE.PointLight(0xffffff, 1.0);
+        pointLight.position.set(0, 15, 5);
+        scene.add(pointLight);
+
+        setupThreeJS();
+        setupRoom();
+
+        camera.position.set(CONFIG.CAMERA_POSITION.x, CONFIG.CAMERA_POSITION.y, CONFIG.CAMERA_POSITION.z);
+        camera.lookAt(CONFIG.CAMERA_LOOKAT.x, CONFIG.CAMERA_LOOKAT.y, CONFIG.CAMERA_LOOKAT.z);
+
+        helper = new MMDAnimationHelper({ sync: true, afterglow: 2.0, resetPhysicsOnLoop: true });
+
+        // アップロードファイルから MMD をロード
+        const mmd = await loadMMDFromFiles(uploadedPmxFile, uploadedVmdFiles, uploadedAllFiles);
+
+        mesh = mmd.mesh;
+
+        // 透過マテリアル修正（既存コードと同じ）
+        mesh.traverse((obj) => {
+            if (!obj.isMesh) return;
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+            const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+            materials.forEach((mat) => {
+                const n = (mat.name || '').toLowerCase();
+                if (n.includes('tranceparent') || n.includes('transparent') ||
+                    n.includes('highlight') || n.includes('ハイライト')) {
+                    mat.transparent = true;
+                    mat.alphaTest = 0.5;
+                    mat.depthWrite = false;
+                    mat.reflectivity = 0;
+                    mat.needsUpdate = true;
+                }
+            });
+        });
+
+        scene.add(mesh);
+        helper.add(mesh, {
+            animation: mmd.animation,
+            physics: CONFIG.MMD.USE_PHYSICS
+        });
+
+        console.log('✅ MMD loaded from upload successfully');
+
+        await setupFaceMesh();
+
+        clock = new THREE.Clock();
+        animate();
+
+    } catch (err) {
+        showError('初期化エラー: ' + err.message);
+        console.error('[Upload] ❌ Failed:', err);
+        // エラー時は画面を再表示
+        if (screen) {
+            screen.style.display = 'flex';
+            screen.style.opacity = '1';
+        }
+    }
+}
+
+/**
+ * PMX / VMD インプットの共通チェック：再生ボタンの有効 / 無効
+ */
+function updateStartButton() {
+    const btn = document.getElementById('start-btn');
+    if (!btn) return;
+    if (uploadedPmxFile && uploadedVmdFiles.length > 0) {
+        btn.classList.add('active');
+    } else {
+        btn.classList.remove('active');
+    }
+}
+
+/**
+ * DropZone に共通の drag イベントを設定
+ */
+function setupDropZone(zoneEl, inputEl, ext, onFiles) {
+    zoneEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        zoneEl.classList.add('drag-over');
+    });
+    zoneEl.addEventListener('dragleave', () => zoneEl.classList.remove('drag-over'));
+
+    zoneEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zoneEl.classList.remove('drag-over');
+        const files = Array.from(e.dataTransfer.files);
+        // ext がある場合はフィルタ、ない場合は全ファイル渡す
+        const filtered = ext ? files.filter(f => f.name.toLowerCase().endsWith(ext)) : files;
+        if (filtered.length > 0 || !ext) onFiles(Array.from(e.dataTransfer.files));
+    });
+
+    inputEl.addEventListener('change', () => {
+        const files = Array.from(inputEl.files);
+        if (files.length > 0) onFiles(files);
+    });
+}
+
+// 初期化: DOM 読み込み後にイベントを登録
+window.addEventListener('DOMContentLoaded', () => {
+    const pmxZone = document.getElementById('pmx-zone');
+    const vmdZone = document.getElementById('vmd-zone');
+    const pmxInput = document.getElementById('pmx-input');
+    const vmdInput = document.getElementById('vmd-input');
+    const pmxStatus = document.getElementById('pmx-status');
+    const vmdStatus = document.getElementById('vmd-status');
+    const startBtn = document.getElementById('start-btn');
+
+    if (!pmxZone || !vmdZone) return;
+
+    // PMX: フォルダ選択 → 中から .pmx を探してテクスチャ含む全ファイルを保持
+    setupDropZone(pmxZone, pmxInput, null, (files) => {
+        const pmx = files.find(f => f.name.toLowerCase().endsWith('.pmx'));
+        if (!pmx) {
+            pmxStatus.textContent = '⚠ .pmx が見つかりません';
+            return;
+        }
+        uploadedPmxFile = pmx;
+        uploadedAllFiles = files;
+
+        const texCount = files.filter(f => /\.(png|jpg|jpeg|bmp|tga|spa|sph)$/i.test(f.name)).length;
+        pmxStatus.textContent = `✅ ${pmx.name}  (+${texCount} textures)`;
+        pmxStatus.classList.add('ready');
+        pmxZone.classList.add('file-ready');
+        updateStartButton();
+    });
+
+    // VMD
+    setupDropZone(vmdZone, vmdInput, '.vmd', (files) => {
+        const vmds = files.filter(f => f.name.toLowerCase().endsWith('.vmd'));
+        if (vmds.length === 0) return;
+        uploadedVmdFiles = vmds;
+        vmdStatus.textContent = '✅ ' + vmds.map(f => f.name).join(', ');
+        vmdStatus.classList.add('ready');
+        vmdZone.classList.add('file-ready');
+        updateStartButton();
+    });
+
+    // 再生ボタン
+    startBtn.addEventListener('click', () => {
+        if (!uploadedPmxFile || uploadedVmdFiles.length === 0) return;
+        startFromUpload();
+    });
+});
+
+

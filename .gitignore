@@ -1,4 +1,12 @@
 node_modules/
+dist/
 .DS_Store
 *.log
 .gemini/
+
+# 開発用データ（著作権コンテンツ・個人データ）
+# 各自のモデル・モーション・動画は各自で用意する
+Models/
+Motions/
+Videos/
+Background/

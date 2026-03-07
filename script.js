@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { MMDAnimationHelper } from 'three/addons/animation/MMDAnimationHelper.js';
-import { FaceMesh } from '@mediapipe/face_mesh';
-import { Camera } from '@mediapipe/camera_utils';
+// FaceMesh / Camera はindex.htmlのCDN script tagからグローバルに読み込み
+/* global FaceMesh */
 
 // --- Configuration ---
 const CONFIG = {

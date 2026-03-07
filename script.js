@@ -725,14 +725,16 @@ async function startCamera(selectedDevice) {
     currentConfig = isVirtual ? { ...CONFIG.PROFILES.VTS } : { ...CONFIG.PROFILES.NORMAL };
     console.log(`[Camera] Applied Profile: ${isVirtual ? 'VTS (High Sensitivity)' : 'NORMAL (Standard)'}`);
 
-    // Constraints: Using 'exact' to ensure the correct device is selected
-    const manualConstraints = {
-        video: {
-            deviceId: { exact: selectedDevice.deviceId },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+    // Constraints: deviceIdが空の場合（権限未付与時）はシンプルな制約にフォールバック
+    const manualConstraints = selectedDevice.deviceId
+        ? {
+            video: {
+                deviceId: { exact: selectedDevice.deviceId },
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
         }
-    };
+        : { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
 
     try {
         currentStream = await navigator.mediaDevices.getUserMedia(manualConstraints);
@@ -745,10 +747,11 @@ async function startCamera(selectedDevice) {
         console.log('[Camera] Camera system initialized successfully.');
     } catch (e) {
         console.error('[Camera] Failed to start camera:', e);
-        // Specialized message for "In Use" error
         const msg = (e.name === 'NotReadableError')
             ? 'カメラが他のアプリ（VTube Studio等）で使用中です。VTSを閉じるか、VTS仮想カメラ（VTubeStudioCam）に切り替えてください。'
-            : 'カメラの切り替えに失敗しました。ブラウザの許可設定を確認してください。';
+            : e.name === 'OverconstrainedError'
+                ? 'カメラのデバイスIDが取得できません。ブラウザのカメラ許可を確認してページを再読み込みしてください。'
+                : 'カメラの起動に失敗しました。ブラウザの許可設定を確認してください。';
         showError(msg);
     }
 }

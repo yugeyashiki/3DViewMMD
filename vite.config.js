@@ -72,6 +72,7 @@ function mmdAssetWatcher() {
 }
 
 export default defineConfig({
+    base: '/3DViewMMD/',
     plugins: [mmdAssetWatcher()],
     // Models/ Motions/ 配下のファイルを静的アセットとして提供
     assetsInclude: ['**/*.pmx', '**/*.vmd', '**/*.bmp', '**/*.spa', '**/*.sph'],

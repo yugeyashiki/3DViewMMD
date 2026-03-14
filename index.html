@@ -434,6 +434,106 @@
             color: #475569;
             letter-spacing: 0.03em;
         }
+
+        /* ===== Physics Control Panel ===== */
+        #physics-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.60);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 12px 16px 14px;
+            z-index: 9990;
+            font-family: 'Segoe UI', 'Consolas', monospace;
+            font-size: 11px;
+            color: #e0e0e0;
+            user-select: none;
+            min-width: 200px;
+            display: none;
+        }
+
+        #physics-panel .phys-title {
+            font-size: 10px;
+            font-weight: bold;
+            letter-spacing: 0.08em;
+            color: #c084fc;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+
+        #physics-panel .phys-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        #physics-toggle {
+            padding: 3px 10px;
+            border-radius: 20px;
+            border: 1px solid rgba(192, 132, 252, 0.5);
+            background: rgba(192, 132, 252, 0.15);
+            color: #c084fc;
+            font-size: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        #physics-toggle.active {
+            background: rgba(192, 132, 252, 0.35);
+            border-color: #c084fc;
+            box-shadow: 0 0 8px rgba(192, 132, 252, 0.4);
+        }
+
+        #physics-influence {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255,255,255,0.15);
+            outline: none;
+            cursor: pointer;
+        }
+
+        #physics-influence::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #c084fc;
+            box-shadow: 0 0 6px rgba(192,132,252,0.6);
+            cursor: pointer;
+        }
+
+        #physics-influence-val {
+            width: 32px;
+            text-align: right;
+            color: #c084fc;
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+        }
+
+        #physics-reset {
+            padding: 3px 10px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255,255,255,0.06);
+            color: #94a3b8;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        #physics-reset:hover {
+            background: rgba(255,255,255,0.12);
+            color: #e2e8f0;
+        }
     </style>
 </head>
 
@@ -584,10 +684,33 @@
         </div>
     </div>
 
+    <!-- Physics Control Panel (shown after 3D starts) -->
+    <div id="physics-panel">
+        <div class="phys-title">⚛ Physics</div>
+        <!-- Toggle -->
+        <div class="phys-row">
+            <button id="physics-toggle">OFF</button>
+            <span style="color:#64748b;">物理演算</span>
+        </div>
+        <!-- Influence slider -->
+        <div class="phys-row">
+            <span style="color:#64748b;min-width:44px;">影響度</span>
+            <input type="range" id="physics-influence" min="0" max="100" value="100" step="1" disabled />
+            <span id="physics-influence-val">100%</span>
+        </div>
+        <!-- Reset -->
+        <div class="phys-row">
+            <button id="physics-reset" disabled>↺ リセット</button>
+            <span style="color:#475569;font-size:10px;">暴れたら押す</span>
+        </div>
+    </div>
+
     <!-- MediaPipe: CDNから直接読み込み (Viteでのバンドルを回避) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <!-- ammo.js (Bullet Physics for MMD) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/ammo.wasm.js" crossorigin="anonymous"></script>
     <!-- Three.js and Logic -->
-    <script type="module" src="/script.js?v=MMD_001"></script>
+    <script type="module" src="/script.js?v=MMD_002"></script>
 </body>
 
 </html>

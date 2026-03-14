@@ -36,7 +36,13 @@ const CONFIG = {
     MMD: {
         MODEL_PATH: '',       // アップロード UI または /__mmd_assets で動的に設定される
         MOTION_PATHS: [],
-        USE_PHYSICS: false
+        USE_PHYSICS: false    // initPhysics() で true に切り替える
+    },
+
+    // Physics Settings
+    PHYSICS: {
+        WARMUP_FRAMES: 60,      // ウォームアップフレーム数（多すぎると初期化が遅くなる）
+        DEFAULT_INFLUENCE: 1.0  // 物理影響度の初期値（0.0〜1.0）
     },
 
     // Box Stage Settings
@@ -112,6 +118,12 @@ let clock = new THREE.Clock();
 let gridRoom = null;
 // Box Stage
 let boxStage = { back: null, left: null, right: null, ceiling: null };
+
+// --- Physics ---
+let physicsEnabled = false;           // UI トグル状態
+let physicsInfluence = CONFIG.PHYSICS.DEFAULT_INFLUENCE;  // 0.0〜1.0
+let preBoneQuats = [];                // 物理適用前のボーン quaternion 保存用
+let ammoReady = false;                // ammo.js 初期化完了フラグ
 
 // Virtual camera position to combine various inputs
 let targetCameraZ = CONFIG.CAMERA_POSITION.z;
@@ -874,7 +886,28 @@ function animate() {
     const delta = clock.getDelta();
 
     if (helper && !isPaused) {
+        // 物理影響度が 1.0 未満のとき: 事前にボーン姿勢を保存
+        if (physicsEnabled && physicsInfluence < 1.0 && mesh && mesh.skeleton) {
+            preBoneQuats = mesh.skeleton.bones.map(b => b.quaternion.clone());
+        } else {
+            preBoneQuats = [];
+        }
+
         helper.update(delta);
+
+        // 物理とアニメーションをブレンド（influence < 1.0 のとき）
+        if (preBoneQuats.length > 0 && mesh && mesh.skeleton) {
+            mesh.skeleton.bones.forEach((bone, i) => {
+                if (preBoneQuats[i]) {
+                    // preBoneQuats[i] = 物理なし(アニメのみ), bone.quaternion = 物理あり
+                    bone.quaternion.slerpQuaternions(
+                        preBoneQuats[i],
+                        bone.quaternion,
+                        physicsInfluence
+                    );
+                }
+            });
+        }
     }
 
     if (userEyePosition) {
@@ -903,6 +936,120 @@ function animate() {
     // HUD & landmark overlay update (same rAF loop)
     updateHud();
     drawLandmarks();
+}
+
+// ============================================================
+// ⚛ Physics: Ammo.js 初期化 / ウォームアップ / UI
+// ============================================================
+
+/**
+ * Ammo.js の初期化を待ち、物理演算を有効化する
+ * CDN 経由でロード済みの Ammo グローバルを使用
+ */
+async function initPhysics() {
+    // ammo.js がロードされているか確認
+    if (typeof Ammo === 'undefined') {
+        console.warn('[Physics] ammo.js not found. Physics disabled.');
+        return false;
+    }
+    try {
+        // Ammo() は Promise を返す（WASM 初期化）
+        await Ammo();
+        ammoReady = true;
+        CONFIG.MMD.USE_PHYSICS = true;
+        console.log('%c[Physics] ✅ Ammo.js ready. Physics enabled.', 'color:#c084fc;font-weight:bold');
+        return true;
+    } catch (e) {
+        console.warn('[Physics] Failed to init Ammo.js:', e);
+        return false;
+    }
+}
+
+/**
+ * ウォームアップ: 物理剛体を落ち着かせるために事前シミュレーション
+ * animate() 開始前に呼ぶことで初回フレームの「爆発」を防ぐ
+ */
+function warmupPhysics(frames = CONFIG.PHYSICS.WARMUP_FRAMES) {
+    if (!helper || !CONFIG.MMD.USE_PHYSICS) return;
+    const dt = 1 / 60;
+    console.log(`[Physics] Warming up: ${frames} frames...`);
+    for (let i = 0; i < frames; i++) {
+        helper.update(dt);
+    }
+    console.log('[Physics] Warm-up complete.');
+}
+
+/**
+ * 物理 "暴れ" のリセット: helper を再生成して剛体を初期位置に戻す
+ */
+function resetPhysics() {
+    if (!helper || !mesh) return;
+    console.log('%c[Physics] ↺ Resetting physics...', 'color:#c084fc');
+    // MMDAnimationHelper の resetPhysics() は内部メソッドなので
+    // helper.enable.physics を一瞬 false → true にしてリセット
+    if (helper.enabled) {
+        helper.enabled.physics = false;
+        requestAnimationFrame(() => {
+            if (helper && helper.enabled) {
+                helper.enabled.physics = physicsEnabled;
+                warmupPhysics(30); // 軽いウォームアップで再安定化
+            }
+        });
+    }
+}
+
+/**
+ * 物理コントロールパネルのUIをセットアップ
+ * 3D再生開始後に呼ぶ
+ */
+function setupPhysicsUI() {
+    const panel        = document.getElementById('physics-panel');
+    const toggleBtn    = document.getElementById('physics-toggle');
+    const slider       = document.getElementById('physics-influence');
+    const sliderVal    = document.getElementById('physics-influence-val');
+    const resetBtn     = document.getElementById('physics-reset');
+
+    if (!panel || !toggleBtn || !slider || !resetBtn) return;
+
+    // パネルを表示
+    panel.style.display = 'block';
+
+    // --- Toggle Button ---
+    toggleBtn.addEventListener('click', () => {
+        physicsEnabled = !physicsEnabled;
+        if (helper && helper.enabled) {
+            helper.enabled.physics = physicsEnabled;
+        }
+        toggleBtn.textContent = physicsEnabled ? 'ON' : 'OFF';
+        toggleBtn.classList.toggle('active', physicsEnabled);
+        slider.disabled  = !physicsEnabled;
+        resetBtn.disabled = !physicsEnabled;
+
+        if (physicsEnabled) {
+            warmupPhysics(30); // ON にした直後に軽くウォームアップ
+        }
+        console.log(`[Physics] ${physicsEnabled ? 'ON ✅' : 'OFF ⬜'}`);
+    });
+
+    // --- Influence Slider ---
+    slider.addEventListener('input', () => {
+        physicsInfluence = slider.value / 100;
+        sliderVal.textContent = `${slider.value}%`;
+        debugLog(`[Physics] Influence: ${slider.value}%`);
+    });
+
+    // --- Reset Button ---
+    resetBtn.addEventListener('click', () => {
+        resetPhysics();
+    });
+
+    // ammo.js が使えない場合はパネル全体をグレーアウト
+    if (!ammoReady) {
+        toggleBtn.disabled = true;
+        toggleBtn.textContent = 'N/A';
+        toggleBtn.title = 'ammo.js が読み込めませんでした';
+        panel.style.opacity = '0.4';
+    }
 }
 
 // ============================================================
@@ -1175,6 +1322,10 @@ async function startFromUpload() {
     console.log('[Upload] 📁 Total files:', uploadedAllFiles.length);
 
     try {
+        // ①.5 ammo.js を初期化（物理有効化）
+        updateLoadingProgress(3, '物理エンジンを初期化中...');
+        await initPhysics();
+
         // シーン・カメラ・ライト・ヘルパーを共通関数でセットアップ
         updateLoadingProgress(5, 'シーンをセットアップ中...');
         setupScene();
@@ -1216,14 +1367,23 @@ async function startFromUpload() {
         updateLoadingProgress(96, 'テクスチャをGPUに転送中...');
         renderer.compile(scene, camera);
 
-        // ④ カメラ（FaceMesh）をセットアップ
+        // ④ 物理ウォームアップ（ammo.js が有効な場合のみ）
+        if (ammoReady) {
+            updateLoadingProgress(97, '物理演算をウォームアップ中...');
+            warmupPhysics();
+        }
+
+        // ⑤ カメラ（FaceMesh）をセットアップ
         updateLoadingProgress(98, 'カメラを初期化中...');
         await setupFaceMesh();
 
-        // ⑤ 完了 → ローディング画面を閉じてアニメーション開始
+        // ⑥ 完了 → ローディング画面を閉じてアニメーション開始
         updateLoadingProgress(100, '完了！');
         await new Promise(r => setTimeout(r, 300)); // 100% を一瞬見せる
         hideLoadingScreen();
+
+        // ⑦ 物理コントロールUIをセットアップ
+        setupPhysicsUI();
 
         clock = new THREE.Clock();
         animate();

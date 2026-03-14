@@ -78,6 +78,32 @@ function debugLog(...args) {
     }
 }
 
+// --- Loading Screen ---
+function showLoadingScreen() {
+    const el = document.getElementById('loading-screen');
+    if (!el) return;
+    el.style.display = 'flex';
+    // 次フレームで visible クラスを付与してフェードイン
+    requestAnimationFrame(() => el.classList.add('visible'));
+    updateLoadingProgress(0, '初期化中...');
+}
+
+function hideLoadingScreen() {
+    const el = document.getElementById('loading-screen');
+    if (!el) return;
+    el.classList.remove('visible');
+    el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+}
+
+function updateLoadingProgress(percent, message) {
+    const bar  = document.getElementById('loading-bar');
+    const pct  = document.getElementById('loading-percent');
+    const stat = document.getElementById('loading-status');
+    if (bar)  bar.style.width  = `${percent}%`;
+    if (pct)  pct.textContent  = `${percent}%`;
+    if (stat && message) stat.textContent = message;
+}
+
 // --- Globals ---
 let scene, camera, renderer;
 let mesh = null;
@@ -580,13 +606,20 @@ async function loadMMDAsync(modelUrl, motionUrls) {
     });
 }
 
+// カメラ許可済みフラグ（2回ダイアログが出ないようにする）
+let cameraPermissionGranted = false;
+
 async function requestCameraPermission() {
+    // すでに許可済みならスキップ
+    if (cameraPermissionGranted) return;
+
     return new Promise((resolve, reject) => {
         const consentOverlay = document.getElementById('consent-overlay');
         const allowButton = document.getElementById('allow-camera');
         const denyButton = document.getElementById('deny-camera');
 
         if (!consentOverlay || !allowButton || !denyButton) {
+            cameraPermissionGranted = true;
             resolve();
             return;
         }
@@ -595,6 +628,7 @@ async function requestCameraPermission() {
         consentOverlay.style.display = 'flex';
 
         allowButton.onclick = () => {
+            cameraPermissionGranted = true;
             consentOverlay.style.display = 'none';
             resolve();
         };
@@ -1044,6 +1078,12 @@ async function loadMMDFromFiles(pmxFile, vmdFiles, allFiles) {
         const manager = new THREE.LoadingManager();
         manager.onStart = (url) => console.log('[Loader] Start:', url);
         manager.onError = (url) => console.warn('[Loader] Not found (may be OK):', url);
+        manager.onProgress = (url, loaded, total) => {
+            if (total > 0) {
+                const pct = Math.min(99, Math.round((loaded / total) * 95)); // 95%までをアセット読み込みに充てる
+                updateLoadingProgress(pct, `テクスチャを読み込み中... (${loaded}/${total})`);
+            }
+        };
 
         manager.setURLModifier((url) => {
             // blob URL または data URL はそのまま
@@ -1110,6 +1150,7 @@ async function loadMMDFromFiles(pmxFile, vmdFiles, allFiles) {
 async function startFromUpload() {
     if (!uploadedPmxFile) return;
 
+    // ① アップロード画面を隠す
     const screen = document.getElementById('upload-screen');
     if (screen) {
         screen.style.transition = 'opacity 0.4s ease';
@@ -1117,15 +1158,29 @@ async function startFromUpload() {
         setTimeout(() => screen.style.display = 'none', 400);
     }
 
+    // ② カメラ許可ダイアログをここで先に表示（ローディング画面の前）
+    try {
+        await requestCameraPermission();
+    } catch (err) {
+        // 拒否された場合はアップロード画面に戻す
+        if (screen) { screen.style.display = 'flex'; screen.style.opacity = '1'; }
+        return;
+    }
+
+    // ③ ローディング画面を表示
+    showLoadingScreen();
+
     console.log('[Upload] 📤 PMX:', uploadedPmxFile.name);
     console.log('[Upload] 💃 VMD:', uploadedVmdFiles.map(f => f.name).join(', '));
     console.log('[Upload] 📁 Total files:', uploadedAllFiles.length);
 
     try {
         // シーン・カメラ・ライト・ヘルパーを共通関数でセットアップ
+        updateLoadingProgress(5, 'シーンをセットアップ中...');
         setupScene();
 
-        // アップロードファイルから MMD をロード
+        // アップロードファイルから MMD をロード（onProgress で 5〜95% を更新）
+        updateLoadingProgress(10, 'モデルを読み込み中...');
         const mmd = await loadMMDFromFiles(uploadedPmxFile, uploadedVmdFiles, uploadedAllFiles);
 
         mesh = mmd.mesh;
@@ -1157,15 +1212,27 @@ async function startFromUpload() {
 
         console.log('✅ MMD loaded from upload successfully');
 
+        // ③ テクスチャを GPU に事前転送（テクスチャ抜けバグの根本解決）
+        updateLoadingProgress(96, 'テクスチャをGPUに転送中...');
+        renderer.compile(scene, camera);
+
+        // ④ カメラ（FaceMesh）をセットアップ
+        updateLoadingProgress(98, 'カメラを初期化中...');
         await setupFaceMesh();
+
+        // ⑤ 完了 → ローディング画面を閉じてアニメーション開始
+        updateLoadingProgress(100, '完了！');
+        await new Promise(r => setTimeout(r, 300)); // 100% を一瞬見せる
+        hideLoadingScreen();
 
         clock = new THREE.Clock();
         animate();
 
     } catch (err) {
+        hideLoadingScreen();
         showError('初期化エラー: ' + err.message);
         console.error('[Upload] ❌ Failed:', err);
-        // エラー時は画面を再表示
+        // エラー時はアップロード画面を再表示
         if (screen) {
             screen.style.display = 'flex';
             screen.style.opacity = '1';

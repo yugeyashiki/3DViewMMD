@@ -10,3 +10,19 @@ Models/
 Motions/
 Videos/
 Background/
+
+# 開発用ドキュメント（公開不要）
+ANTIGRAVITY_UPLOAD_GUIDE.md
+PROMPT_FOR_ANTIGRAVITY.md
+ProcessPlan.md
+feasibility_report.md
+SPECIFICATION.md
+SPECIFICATION_GENERIC.md
+QUICK_REFERENCE.md
+
+# 開発用スクリプト
+check_pmx.py
+parse_pmx.py
+
+# エージェント設定
+.agent/

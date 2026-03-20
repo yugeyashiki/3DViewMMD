@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="data:,">
+    <link rel="icon" type="image/png" href="/IconImg/icon4.png">
     <title>MMD Web 3D Viewer</title>
     <style>
         body {
@@ -377,6 +377,29 @@
             opacity: 1;
         }
 
+        #loading-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 28px;
+        }
+
+        /* Loading タイトル行（動画 + テキスト 横並び） */
+        #loading-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+
+        /* インライン動画：テキストと同じ高さ */
+        #loading-inline-video {
+            height: 4.8em;
+            width: auto;
+            border-radius: 4px;
+            display: block;
+            flex-shrink: 0;
+        }
+
         /* Loading... animated dots */
         @keyframes dots {
             0%   { content: '.'; }
@@ -540,7 +563,7 @@
 <body>
     <!-- File Upload Screen -->
     <div id="upload-screen">
-        <h1>🎭 MMD Web 3D Viewer</h1>
+        <h1><span style="display:inline-block;width:2em;height:2em;vertical-align:middle;margin-right:0.3em;border-radius:50%;flex-shrink:0;background:url('/IconImg/icon4.png') no-repeat center 33% / 280%;"></span> MMD Web 3D Viewer</h1>
         <p class="subtitle">あなたの PMX モデルと VMD モーションをアップロードして始めましょう</p>
 
         <div class="upload-zones">
@@ -576,12 +599,20 @@
 
     <!-- Loading Screen -->
     <div id="loading-screen">
-        <div id="loading-title">Loading</div>
-        <div id="loading-percent">0%</div>
-        <div id="loading-bar-wrap">
-            <div id="loading-bar"></div>
+        <div id="loading-content">
+            <!-- タイトル行：動画 + Loading テキスト 横並び -->
+            <div id="loading-title-row">
+                <video id="loading-inline-video" autoplay loop muted playsinline preload="auto">
+                    <source src="/LoadingMovie/LoadingMove.mp4" type="video/mp4">
+                </video>
+                <div id="loading-title">Loading</div>
+            </div>
+            <div id="loading-percent">0%</div>
+            <div id="loading-bar-wrap">
+                <div id="loading-bar"></div>
+            </div>
+            <div id="loading-status">初期化中...</div>
         </div>
-        <div id="loading-status">初期化中...</div>
     </div>
 
     <div id="consent-overlay"
@@ -685,7 +716,7 @@
     </div>
 
     <!-- Physics Control Panel (shown after 3D starts) -->
-    <div id="physics-panel">
+    <div id="physics-panel" style="display:none"><!-- 物理UI廃止: 常時ON -->
         <div class="phys-title">⚛ Physics</div>
         <!-- Toggle -->
         <div class="phys-row">

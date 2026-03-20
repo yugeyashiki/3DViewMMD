@@ -120,8 +120,8 @@ let gridRoom = null;
 let boxStage = { back: null, left: null, right: null, ceiling: null };
 
 // --- Physics ---
-let physicsEnabled = false;           // UI トグル状態
-let physicsInfluence = CONFIG.PHYSICS.DEFAULT_INFLUENCE;  // 0.0〜1.0
+let physicsEnabled = true;            // 常時ON（UIトグル廃止）
+let physicsInfluence = 1.0;           // 影響度100%固定
 let preBoneQuats = [];                // 物理適用前のボーン quaternion 保存用
 let ammoReady = false;                // ammo.js 初期化完了フラグ
 
@@ -1011,8 +1011,8 @@ function setupPhysicsUI() {
 
     if (!panel || !toggleBtn || !slider || !resetBtn) return;
 
-    // パネルを表示
-    panel.style.display = 'block';
+    // パネルを表示（デフォルト非表示の要望によりコメントアウト）
+    // panel.style.display = 'block';
 
     // --- Toggle Button ---
     toggleBtn.addEventListener('click', () => {
